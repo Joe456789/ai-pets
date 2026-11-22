@@ -1,0 +1,13 @@
+# 模型權重（約 4 GB，用 fetch_models.py 下載）
+models/
+# 照片、影片、產出的模型和任務暫存
+input/
+video/
+output/
+jobs/
+# 執行紀錄
+*.log
+# 工作站密鑰，不要上傳
+worker.env
+.claude/
+__pycache__/
