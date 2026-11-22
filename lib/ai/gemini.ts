@@ -1,9 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
-import { aiCapOf, trialExpired } from "@/lib/plans";
 import { monthKey } from "@/lib/time";
-import type { ShelterDoc } from "@/lib/types";
 
 export type AiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 
@@ -11,7 +9,10 @@ export class AiUnavailableError extends Error {}
 
 export const aiConfigured = () => Boolean(process.env.GEMINI_API_KEY);
 export const MODEL = () => process.env.GEMINI_MODEL ?? "gemini-3.5-flash-lite";
+// 全平台每月上限，以及每位飼主每月上限（公開評估頁共用 "public"），避免費用失控。
 const MONTHLY_CALL_CAP = () => Number(process.env.AI_MONTHLY_CALL_CAP ?? 3000);
+const OWNER_CALL_CAP = () => Number(process.env.AI_OWNER_MONTHLY_CAP ?? 80);
+const PUBLIC_CALL_CAP = () => Number(process.env.AI_PUBLIC_MONTHLY_CAP ?? 500);
 
 let client: GoogleGenAI | null = null;
 export function ai() {
@@ -36,14 +37,16 @@ export type Usage = { calls?: number; inputTokens?: number; outputTokens?: numbe
 export async function getUsage(scope: string) {
   return (await getDb().get<Usage>(usagePath(scope))) ?? {};
 }
-export const recordUsage = (scope: string, fields: Record<string, number>) => getDb().increment(usagePath(scope), fields);
+export async function recordUsage(scope: string, fields: Record<string, number>) {
+  await Promise.all([getDb().increment(usagePath(scope), fields), getDb().increment(usagePath("all"), fields)]);
+}
 
-/** 檢查試用是否到期、本月次數是否用完。 */
+/** 檢查本月次數是否用完：全平台和這位飼主各有上限。 */
 export async function assertQuota(scope: string, needed = 1) {
-  const [usage, shelter] = await Promise.all([getUsage(scope), getDb().get<ShelterDoc>(`shelters/${scope}`)]);
-  if (shelter && trialExpired(shelter)) throw new AiUnavailableError("試用期已結束，AI 功能暫停，請聯絡平台管理者");
-  const cap = shelter ? aiCapOf(shelter) : MONTHLY_CALL_CAP();
-  if ((usage.calls ?? 0) + needed > cap) throw new AiUnavailableError("本月 AI 使用量已達方案上限");
+  const [usage, all] = await Promise.all([getUsage(scope), getUsage("all")]);
+  if ((all.calls ?? 0) + needed > MONTHLY_CALL_CAP()) throw new AiUnavailableError("本月 AI 使用量已達上限，請下個月再試");
+  const cap = scope === "public" ? PUBLIC_CALL_CAP() : OWNER_CALL_CAP();
+  if ((usage.calls ?? 0) + needed > cap) throw new AiUnavailableError("你這個月的 AI 使用次數已經用完，下個月會恢復");
 }
 
 // Gemini 的 JSON Schema 只支援部分語法，去掉它不需要的欄位。
@@ -58,7 +61,7 @@ function toGeminiSchema(schema: z.ZodType) {
   return strip(z.toJSONSchema(schema));
 }
 
-/** 呼叫 Gemini 取得結構化 JSON。scope 用來分開記錄各協會的用量和上限。 */
+/** 呼叫 Gemini 取得結構化 JSON。scope 是飼主 ID（或公開頁的 "public"），用來分開記錄用量和上限。 */
 export async function generateJson<T>(opts: { scope: string; system: string; parts: AiPart[]; schema: z.ZodType<T>; temperature?: number }): Promise<T> {
   await assertQuota(opts.scope);
 

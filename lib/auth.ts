@@ -1,14 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { getAdmin } from "@/lib/platform";
-import { getManager, getShelter } from "@/lib/repo";
+import { DEMO_UID, isDemo } from "@/lib/repo";
 
-const COOKIE = "ll_session";
-const MAX_AGE = 60 * 60 * 12;
+// 飼主用 LINE 身分登入（LIFF），伺服器驗證後發這個 cookie。內容只有 LINE 使用者 ID 和到期時間。
+const COOKIE = "cy_session";
+const MAX_AGE = 60 * 60 * 24 * 30;
 
-export type Role = "manager" | "admin";
-type Session = { email: string; sid: string; role: Role; exp: number };
+type Session = { uid: string; role: "owner"; exp: number };
 
 function secret() {
   const s = process.env.SESSION_SECRET;
@@ -31,15 +29,15 @@ export function readSession(token: string | undefined): Session | null {
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
   try {
     const p = JSON.parse(Buffer.from(body, "base64url").toString()) as Session;
-    return p.exp > Date.now() / 1000 && (p.role === "manager" || p.role === "admin") ? p : null;
+    return p.exp > Date.now() / 1000 && p.role === "owner" && typeof p.uid === "string" ? p : null;
   } catch {
     return null;
   }
 }
 
-export async function startSession(email: string, sid: string, role: Role) {
-  const store = await cookies();
-  store.set(COOKIE, signSession({ email, sid, role, exp: Math.floor(Date.now() / 1000) + MAX_AGE }), {
+export async function startSession(uid: string) {
+  (await cookies()).set(COOKIE, signSession({ uid, role: "owner", exp: Math.floor(Date.now() / 1000) + MAX_AGE }), {
+    // LIFF 在 LINE 內建瀏覽器開啟，同網域即可，不需要第三方 cookie。
     httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: MAX_AGE,
   });
 }
@@ -48,24 +46,20 @@ export async function endSession() {
   (await cookies()).delete(COOKIE);
 }
 
-const current = async () => readSession((await cookies()).get(COOKIE)?.value);
-
-/** 所有協會後台的頁面和動作都先呼叫它，協會 ID 只從登入狀態取得，不信任網址或表單。 */
-export async function requireManager() {
-  const session = await current();
-  if (!session || session.role !== "manager") redirect("/login/shelter");
-  const manager = await getManager(session.email);
-  if (!manager || manager.sid !== session.sid) redirect("/login/shelter");
-  const shelter = await getShelter(manager.sid);
-  if (!shelter || shelter.status === "已停用") redirect("/login/shelter?off=1");
-  return { sid: manager.sid, name: manager.name, email: manager.email };
+/** 目前登入的飼主 ID，沒登入回 null。頁面用它決定要不要顯示登入。 */
+export async function currentUid() {
+  return readSession((await cookies()).get(COOKIE)?.value)?.uid ?? null;
 }
 
-/** 平台總後台專用，和協會管理者是不同的帳號。 */
-export async function requireAdmin() {
-  const session = await current();
-  if (!session || session.role !== "admin") redirect("/login/admin");
-  const admin = await getAdmin(session.email);
-  if (!admin) redirect("/login/admin");
-  return { email: admin.email, name: admin.name };
+export class NotSignedIn extends Error {}
+export class DemoReadOnly extends Error {}
+
+/** 會修改資料的動作都先呼叫它。示範帳號只能看。 */
+export async function requireWriter() {
+  const uid = await currentUid();
+  if (!uid) throw new NotSignedIn("請先用 LINE 登入");
+  if (isDemo(uid)) throw new DemoReadOnly("這是示範帳號，只能瀏覽。加入 LINE 好友就能建立自己的紀錄。");
+  return uid;
 }
+
+export const startDemoSession = () => startSession(DEMO_UID);

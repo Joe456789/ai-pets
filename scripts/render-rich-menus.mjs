@@ -1,11 +1,7 @@
-// 產生 LINE 圖文選單圖片（2500x1686，LINE 上限 1MB）。
+// 產生「從此有你」的 LINE 圖文選單圖片（2500x1686，LINE 上限 1MB）。
 // 用法：node scripts/render-rich-menus.mjs
-// 以 Edge 無頭模式把 HTML 截圖成 PNG，文字用 Noto Sans TC（SIL OFL 授權）。
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, statSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import sharp from "sharp";
 
 const INK = "#26302b";
@@ -140,67 +136,64 @@ const icons = {
     <path d="M150 170 C126 152 134 134 150 146 C166 134 174 152 150 170 Z" fill="${PAPER}"/>`,
 };
 
+const ROSE = "#b5523b";
+const DUSK = "#3b3a4a";
+icons.memorial = `
+    <path d="M100 20 C60 20 40 50 40 84 V184 H160 V84 C160 50 140 20 100 20 Z" fill="${PAPER}" ${s}/>
+    ${dogFace(100, 96, 0.9, "#c98f45", "#a56f2e")}
+    ${heart(100, 158, 16, ROSE)}`;
+icons.receipt = `
+    <path d="M44 18 H156 V184 L138 170 L120 184 L100 170 L80 184 L62 170 L44 184 Z" fill="${PAPER}" ${s}/>
+    <path d="M66 54 H134 M66 82 H134 M66 110 H112" stroke="${INK}" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="150" cy="150" r="34" fill="${MOSS}" ${s}/>
+    <circle cx="150" cy="150" r="14" fill="${PAPER}"/>`;
+
+icons.calendar = `
+    <rect x="20" y="34" width="160" height="148" rx="22" fill="${PAPER}" ${s}/>
+    <path d="M20 78 H180" ${s}/>
+    <rect x="20" y="34" width="160" height="44" rx="22" fill="${MOSS}" ${s}/>
+    <path d="M62 18 V50 M138 18 V50" stroke="${INK}" stroke-width="14" stroke-linecap="round"/>
+    <g fill="${INK}" opacity=".25">
+      <rect x="44" y="96" width="24" height="20" rx="5"/><rect x="88" y="96" width="24" height="20" rx="5"/><rect x="132" y="96" width="24" height="20" rx="5"/>
+      <rect x="44" y="132" width="24" height="20" rx="5"/>
+    </g>
+    <circle cx="138" cy="142" r="30" fill="${CLAY}" ${s}/>
+    ${check(138, 142, 20)}`;
+
 const menus = {
-  staff: {
-    bg: MOSS_DEEP,
+  owner: {
+    bg: ROSE,
     tiles: [
-      { icon: "camera", label: "新增動物", sub: "拍照＋講一段話", fill: BUTTER, text: INK, subColor: "#4d3a0d" },
-      { icon: "voice", label: "回報照護", sub: "只講有狀況的", fill: CLAY, text: PAPER, subColor: "#fff1e8" },
-      { icon: "search", label: "查詢動物", sub: "輸入名字或編號", fill: SAGE, text: INK, subColor: "#37503f" },
-      { icon: "clipboard", label: "今日摘要", sub: "待辦和提醒", fill: SAGE, text: INK, subColor: "#37503f" },
-      { icon: "badge", label: "我的資料", sub: "工作號和區域", fill: PAPER, text: INK, subColor: "#55605a" },
-      { icon: "book", label: "使用說明", sub: "第一次用看這裡", fill: PAPER, text: INK, subColor: "#55605a" },
-    ],
-  },
-  adopter: {
-    bg: CLAY,
-    tiles: [
-      { icon: "pets", label: "看領養動物", sub: "誰在等一個家", fill: BUTTER, text: INK, subColor: "#4d3a0d" },
-      { icon: "faq", label: "常見問題", sub: "費用、流程、時間", fill: PAPER, text: INK, subColor: "#55605a" },
-      { icon: "steps", label: "申請進度", sub: "輸入申請編號", fill: SAGE, text: INK, subColor: "#37503f" },
-      { icon: "care", label: "問照顧問題", sub: "AI 先幫你解答", fill: SAGE, text: INK, subColor: "#37503f" },
-      { icon: "contact", label: "聯絡協會", sub: "找真人協助", fill: PEACH, text: INK, subColor: "#6b3b24" },
-      { icon: "photo", label: "分享近況", sub: "傳照片給協會", fill: PAPER, text: INK, subColor: "#55605a" },
+      { icon: "clipboard", label: "飼養前評估", sub: "養之前先想清楚", fill: BUTTER, text: INK, subColor: "#4d3a0d" },
+      { icon: "pets", label: "我的毛孩", sub: "資料和紀錄", fill: PAPER, text: INK, subColor: "#55605a" },
+      { icon: "receipt", label: "拍醫療單據", sub: "AI 幫你整理", fill: SAGE, text: INK, subColor: "#37503f" },
+      { icon: "calendar", label: "照顧日曆", sub: "驅蟲疫苗前一天提醒", fill: SAGE, text: INK, subColor: "#37503f" },
+      { icon: "book", label: "飼主小學堂", sub: "每月一課加小測驗", fill: BUTTER, text: INK, subColor: "#4d3a0d" },
+      { icon: "memorial", label: "紀念與告別", sub: "3D 留下牠的樣子", fill: DUSK, text: PAPER, subColor: "#e8e2ea" },
     ],
   },
 };
 
-const html = (m) => `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;900&display=block" rel="stylesheet">
-<style>
-  * { box-sizing: border-box; margin: 0; }
-  html, body { width: 2500px; height: 1686px; overflow: hidden; background: ${m.bg}; }
-  body { font-family: "Noto Sans TC", sans-serif; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 16px; padding: 16px; }
-  .tile { border-radius: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 30px 20px; }
-  .tile svg { width: 400px; height: 400px; display: block; overflow: visible; }
-  .label { font-weight: 900; font-size: 128px; line-height: 1.1; letter-spacing: 2px; white-space: nowrap; }
-  .sub { font-weight: 500; font-size: 68px; line-height: 1.15; white-space: nowrap; }
-</style></head><body>
-${m.tiles.map((t) => `<div class="tile" style="background:${t.fill}">
-  <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">${icons[t.icon]}</svg>
-  <div class="label" style="color:${t.text}">${t.label}</div>
-  <div class="sub" style="color:${t.subColor}">${t.sub}</div>
-</div>`).join("\n")}
-</body></html>`;
-
-const edge = ["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe"].find(existsSync);
-if (!edge) throw new Error("找不到 Edge 或 Chrome");
+// 直接組成一張 SVG，用 sharp 轉成 PNG（不需要瀏覽器）。字型用系統的正黑體，沒有的話退回 Noto Sans TC。
+const FONT = "Microsoft JhengHei, Noto Sans TC, PingFang TC, sans-serif";
+const W = 2500, H = 1686, GAP = 16;
+const tw = (W - GAP * 4) / 3, th = (H - GAP * 3) / 2;
+const svg = (m) => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
+<rect width="${W}" height="${H}" fill="${m.bg}"/>
+${m.tiles.map((t, i) => {
+  const x = GAP + (i % 3) * (tw + GAP), y = GAP + Math.floor(i / 3) * (th + GAP), cx = x + tw / 2;
+  return `<rect x="${x}" y="${y}" width="${tw}" height="${th}" rx="44" fill="${t.fill}"/>
+  <svg x="${cx - 190}" y="${y + 50}" width="380" height="380" viewBox="0 0 200 200" overflow="visible">${icons[t.icon]}</svg>
+  <text x="${cx}" y="${y + 590}" text-anchor="middle" font-family="${FONT}" font-weight="700" font-size="120" fill="${t.text}">${t.label}</text>
+  <text x="${cx}" y="${y + 700}" text-anchor="middle" font-family="${FONT}" font-size="66" fill="${t.subColor}">${t.sub}</text>`;
+}).join("")}
+</svg>`;
 
 const outDir = resolve("public/richmenu");
 mkdirSync(outDir, { recursive: true });
-const work = mkdtempSync(join(tmpdir(), "richmenu-"));
-
 for (const [name, menu] of Object.entries(menus)) {
-  const htmlPath = join(work, `${name}.html`);
-  const rawPng = join(work, `${name}.png`);
-  writeFileSync(htmlPath, html(menu));
-  execFileSync(edge, [
-    "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
-    "--window-size=2500,1686", "--virtual-time-budget=15000", `--user-data-dir=${join(work, "profile")}`,
-    `--screenshot=${rawPng}`, pathToFileURL(htmlPath).href,
-  ], { stdio: "ignore", timeout: 120000 });
   const out = join(outDir, `${name}.png`);
-  await sharp(rawPng).resize(2500, 1686, { fit: "cover", position: "top" }).png({ compressionLevel: 9 }).toFile(out);
+  await sharp(Buffer.from(svg(menu))).png({ compressionLevel: 9, palette: true }).toFile(out);
   const size = statSync(out).size;
   console.log(name, `${Math.round(size / 1024)} KB`, size > 1024 * 1024 ? "超過 LINE 1MB 上限" : "OK");
 }

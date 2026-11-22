@@ -1,105 +1,96 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Storage } from "@google-cloud/storage";
 import sharp from "sharp";
 
-// 照片、去背圖和動態影片存在 Cloud Storage（未設定 GCS_BUCKET 時存在本機 .data），由本站 /media 路徑提供。
-// 檔名是隨機 UUID；照片存入前先縮圖並移除 EXIF，避免把拍攝地點等資訊一起公開。
-const FILE_RE = /^[0-9a-f-]{36}\.(jpg|png|mp4)$/;
-const SID_RE = /^[a-z0-9-]+$/;
-const TYPES = { jpg: "image/jpeg", png: "image/png", mp4: "video/mp4" } as const;
+// 飼主的照片、醫療單據和 3D 模型都是私人檔案，存在 Cloud Storage（未設定 GCS_BUCKET 時存在本機 .data）。
+// 網址是 /files/<範圍>/<檔名>，只有本人登入、或帶著伺服器簽發的簽章才能讀取（見 app/files 路由）。
+// 範圍是飼主 ID 的雜湊，網址裡不會出現 LINE 使用者 ID。照片存入前會縮圖並移除 EXIF。
+const FILE_RE = /^[0-9a-f-]{36}\.(jpg|png|glb)$/;
+const SCOPE_RE = /^o-[0-9a-f]{16}$/;
+const TYPES = { jpg: "image/jpeg", png: "image/png", glb: "model/gltf-binary" } as const;
 type Ext = keyof typeof TYPES;
 
-const localPath = (sid: string, file: string) => join(/*turbopackIgnore: true*/ process.cwd(), ".data", "media", sid, file);
-const objectName = (sid: string, file: string) => `media/${sid}/${file}`;
-const bucket = () => new Storage().bucket(process.env.GCS_BUCKET as string);
-const valid = (sid: string, file: string) => SID_RE.test(sid) && FILE_RE.test(file);
+export const scopeOf = (uid: string) => `o-${createHash("sha256").update(`owner:${uid}`).digest("hex").slice(0, 16)}`;
 export const mediaType = (file: string) => TYPES[file.split(".").pop() as Ext] ?? "application/octet-stream";
+export const validFile = (scope: string, file: string) => SCOPE_RE.test(scope) && FILE_RE.test(file);
 
-async function writeObject(sid: string, file: string, data: Buffer) {
+const localPath = (scope: string, file: string) => join(/*turbopackIgnore: true*/ process.cwd(), ".data", "files", scope, file);
+const objectName = (scope: string, file: string) => `files/${scope}/${file}`;
+const bucket = () => new Storage().bucket(process.env.GCS_BUCKET as string);
+
+function secret() {
+  const s = process.env.SESSION_SECRET;
+  if (s) return s;
+  if (process.env.NODE_ENV === "production") throw new Error("缺少 SESSION_SECRET");
+  return "dev-only-session-secret";
+}
+
+/** 給分享頁和工作站用的簽章，讓沒有登入的人也能讀取這一個檔案。 */
+export function signFile(url: string) {
+  return createHmac("sha256", secret()).update(`file:${url}`).digest("base64url").slice(0, 22);
+}
+export function verifyFileSig(url: string, sig: string | null) {
+  if (!sig) return false;
+  const a = Buffer.from(signFile(url));
+  const b = Buffer.from(sig);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+export const signedUrl = (url: string) => `${url}?s=${signFile(url)}`;
+
+export function parseFileUrl(url: string) {
+  const m = /^\/files\/([^/]+)\/([^/?]+)$/.exec(url);
+  return m && validFile(m[1], m[2]) ? { scope: m[1], file: m[2] } : null;
+}
+
+async function writeObject(scope: string, file: string, data: Buffer) {
   if (process.env.GCS_BUCKET) {
-    await bucket().file(objectName(sid, file)).save(data, { contentType: mediaType(file), resumable: false });
+    await bucket().file(objectName(scope, file)).save(data, { contentType: mediaType(file), resumable: false });
   } else {
-    const p = localPath(sid, file);
+    const p = localPath(scope, file);
     mkdirSync(/*turbopackIgnore: true*/ dirname(p), { recursive: true });
     writeFileSync(/*turbopackIgnore: true*/ p, data);
   }
-  return `/media/${sid}/${file}`;
+  return `/files/${scope}/${file}`;
 }
 
-export async function savePhoto(sid: string, input: Buffer) {
-  const data = await sharp(input).rotate().resize(1280, 1280, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
-  return writeObject(sid, `${randomUUID()}.jpg`, data);
+/** 照片和單據：轉正、縮到 1600 像素、去掉 EXIF。單據要看得清楚字，所以比一般照片大一點。 */
+export async function savePhoto(uid: string, input: Buffer, maxSide = 1600) {
+  const data = await sharp(input).rotate().resize(maxSide, maxSide, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+  return writeObject(scopeOf(uid), `${randomUUID()}.jpg`, data);
 }
 
-const LIMITS: Record<"png" | "mp4", number> = { png: 4 * 1024 * 1024, mp4: 30 * 1024 * 1024 };
+const GLB_LIMIT = 15 * 1024 * 1024;
 
-/** 儲存去背圖（PNG）或動態影片（MP4）。會檢查檔頭，不接受其他格式。 */
-export async function saveAsset(sid: string, data: Buffer, ext: "png" | "mp4") {
-  if (data.length === 0 || data.length > LIMITS[ext]) throw new Error("檔案太大或是空的");
-  const isPng = data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  const isMp4 = data.subarray(4, 8).toString("latin1") === "ftyp";
-  if ((ext === "png" && !isPng) || (ext === "mp4" && !isMp4)) throw new Error("檔案格式不正確");
-  return writeObject(sid, `${randomUUID()}.${ext}`, data);
+/** 工作站做好的 3D 模型。會檢查 GLB 檔頭。 */
+export async function saveGlb(uid: string, data: Buffer) {
+  if (data.length < 20 || data.length > GLB_LIMIT) throw new Error("模型檔太大或是空的");
+  if (data.subarray(0, 4).toString("latin1") !== "glTF") throw new Error("不是 GLB 檔");
+  return writeObject(scopeOf(uid), `${randomUUID()}.glb`, data);
 }
 
-export async function readPhoto(sid: string, file: string): Promise<Buffer | null> {
-  if (!valid(sid, file)) return null;
+export async function readFile(scope: string, file: string): Promise<Buffer | null> {
+  if (!validFile(scope, file)) return null;
   if (process.env.GCS_BUCKET) {
-    const f = bucket().file(objectName(sid, file));
+    const f = bucket().file(objectName(scope, file));
     const [exists] = await f.exists();
     if (!exists) return null;
     const [buf] = await f.download();
     return buf;
   }
-  const p = localPath(sid, file);
+  const p = localPath(scope, file);
   return existsSync(/*turbopackIgnore: true*/ p) ? readFileSync(/*turbopackIgnore: true*/ p) : null;
 }
 
-export async function readPhotoByUrl(url: string) {
-  const m = /^\/media\/([^/]+)\/([^/]+)$/.exec(url);
-  return m ? readPhoto(m[1], m[2]) : null;
+export async function readFileByUrl(url: string) {
+  const f = parseFileUrl(url);
+  return f ? readFile(f.scope, f.file) : null;
 }
 
-export async function mediaSize(sid: string, file: string): Promise<number | null> {
-  if (!valid(sid, file)) return null;
-  if (process.env.GCS_BUCKET) {
-    const f = bucket().file(objectName(sid, file));
-    const [exists] = await f.exists();
-    if (!exists) return null;
-    const [meta] = await f.getMetadata();
-    return Number(meta.size);
-  }
-  const p = localPath(sid, file);
-  return existsSync(/*turbopackIgnore: true*/ p) ? statSync(/*turbopackIgnore: true*/ p).size : null;
-}
-
-/** 讀取一段位元組（end 含在內）。iPhone 的 Safari 播影片時一定會用分段請求。 */
-export async function readMediaRange(sid: string, file: string, start: number, end: number): Promise<Buffer> {
-  if (process.env.GCS_BUCKET) {
-    const [buf] = await bucket().file(objectName(sid, file)).download({ start, end });
-    return buf;
-  }
-  return readFileSync(/*turbopackIgnore: true*/ localPath(sid, file)).subarray(start, end + 1);
-}
-
-/** 解析 Range 標頭。沒有標頭回 null；格式錯誤或超出範圍回 "invalid"。 */
-export function parseRange(header: string | null, size: number): { start: number; end: number } | null | "invalid" {
-  if (!header) return null;
-  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!m || (m[1] === "" && m[2] === "")) return "invalid";
-  let start: number;
-  let end: number;
-  if (m[1] === "") {
-    const suffix = Number(m[2]);
-    if (suffix === 0) return "invalid";
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else {
-    start = Number(m[1]);
-    end = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1);
-  }
-  if (start >= size || start > end) return "invalid";
-  return { start, end };
+export async function deleteFileByUrl(url: string) {
+  const f = parseFileUrl(url);
+  if (!f) return;
+  if (process.env.GCS_BUCKET) await bucket().file(objectName(f.scope, f.file)).delete({ ignoreNotFound: true });
+  else rmSync(/*turbopackIgnore: true*/ localPath(f.scope, f.file), { force: true });
 }

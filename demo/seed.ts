@@ -1,239 +1,139 @@
-import { hashPassword } from "@/lib/password";
-import { animals as demoAnimals, applications as demoApps, conversations as demoConvs, shelters as demoShelters, staff as demoStaff } from "@/demo/data";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import sharp from "sharp";
+import { addMonths } from "@/lib/care";
 import { getDb } from "@/lib/db";
-import { publicId, publishAnimal } from "@/lib/repo";
+import { lifetimeCost } from "@/lib/lifetimeCost";
+import { savePhoto } from "@/lib/media";
+import { changeReminder, planChange } from "@/lib/lifeChange";
+import { assessReadiness, costProfileOf } from "@/lib/readiness";
+import { DEMO_UID } from "@/lib/repo";
 import { taipeiDate } from "@/lib/time";
-import type { AnimalDoc, ApplicationDoc, ConversationDoc, MatchTags, ShelterDoc, StaffDoc } from "@/lib/types";
+import type { AssessAnswers, AssessmentDoc, CareItem, ChangeAnswers, ChangeDoc, LessonProgress, MemorialDoc, OwnerDoc, PetDoc, RecordDoc, ReminderDoc } from "@/lib/types";
 
-// 寫入虛構的示範資料。協會、人員、動物皆非真實。
-const PREFIX: Record<string, string> = { nuanwo: "NW", shanqiu: "SQ", gangbian: "GB", daotian: "DT" };
-const AREAS: Record<string, string[]> = { nuanwo: ["A 區", "B 區"], shanqiu: ["前院", "室內區"], gangbian: ["貓房"], daotian: ["前院"] };
-const CODES: Record<string, string> = { "HP-7K3Q": "A27391568", "HP-2M9X": "K68412093", "HP-5T8R": "M15937426", "HP-9C4L": "T40278651" };
+// 示範帳號的虛構資料：一位飼主、一份評估、一隻在世的貓（三張虛構單據、一份搬家的準備清單）、一隻已離開的狗（3D 紀念）。
+// 用固定 ID，重複執行會覆蓋成最新日期。單據圖片是程式畫的，醫院和內容都是虛構的。
 
-// 已經做好 3D 模型的示範動物（public/models）
-const DEMO_MODELS: Record<string, string> = { afu: "/models/afu-v2.glb" };
+const day = (offset: number) => taipeiDate(new Date(Date.now() + offset * 864e5));
+const iso = (offset: number) => new Date(Date.now() + offset * 864e5).toISOString();
 
-const DEMO_TAGS: Record<string, MatchTags> = {
-  afu: { energy: "中", beginnerOk: "是", kidOk: "未知", apartmentOk: "否" },
-  douhua: { energy: "高", beginnerOk: "否", kidOk: "是", apartmentOk: "是" },
-  atu: { energy: "低", beginnerOk: "是", kidOk: "是", apartmentOk: "是" },
-  mochi: { energy: "低", beginnerOk: "是", kidOk: "未知", apartmentOk: "是" },
-  juzi: { energy: "高", beginnerOk: "未知", kidOk: "未知", apartmentOk: "是" },
-  zhima: { energy: "低", beginnerOk: "是", kidOk: "否", apartmentOk: "是" },
-  naicha: { energy: "中", beginnerOk: "是", kidOk: "是", apartmentOk: "未知" },
-  xiaohei: { energy: "中", beginnerOk: "否", kidOk: "否", apartmentOk: "未知" },
-};
+type Receipt = { id: string; date: number; follow?: number; items: [string, string][]; meds: [string, string][]; total: number; terms: [string, string][] };
 
-const FAQ = [
-  { q: "領養要多少錢？", a: "領養不收費，但會請你負擔晶片登記和疫苗的實際費用。詳細金額可以在面談時向協會確認。" },
-  { q: "怎麼預約參觀？", a: "請告訴我們想看哪一隻和方便的時間，協會人員會回覆你確認。" },
-  { q: "領養流程是什麼？", a: "線上申請、協會審核、預約面談與互動、簽署領養切結書，最後帶牠回家。" },
+const RECEIPTS: Receipt[] = [
+  {
+    id: "demo-rec-1", date: -128, items: [["理學檢查", ""], ["貓三合一疫苗", "第 1 劑"], ["血液檢查 CBC、生化", ""]], meds: [], total: 3850,
+    terms: [["CBC", "全血球計數，看紅血球、白血球和血小板的數量。"], ["生化", "血液生化檢查，用來了解肝、腎等器官的指數。"]],
+  },
+  {
+    id: "demo-rec-2", date: -41, items: [["耳道檢查", "雙側"], ["耳道清潔", ""], ["診斷：外耳炎", ""]], meds: [["耳滴劑", "一天兩次，每次每耳 2 滴，共 7 天"]], total: 1200,
+    terms: [["外耳炎", "外耳道發炎的統稱，原因很多，要由獸醫判斷。"], ["耳道清潔", "用清耳液清除耳垢和分泌物。"]],
+  },
+  {
+    id: "demo-rec-3", date: -9, follow: 5, items: [["耳道複診", ""], ["牙齒檢查", ""]], meds: [], total: 600,
+    terms: [["複診", "回到醫院讓獸醫追蹤上次看診的狀況。"]],
+  },
 ];
 
-const ago = (days: number) => new Date(Date.now() - days * 864e5).toISOString();
-
-// 示範資料的日期都以「寫入當天」為準。data.ts 裡的疫苗到期日是以 2026/11/05 寫的，換算成距離今天的天數。
-const DEMO_REF = Date.UTC(2026, 10, 5);
-function shiftDue(due: string) {
-  const t = Date.parse(`${due.replaceAll("/", "-")}T00:00:00Z`);
-  if (Number.isNaN(t)) return due;
-  return taipeiDate(new Date(Date.now() + (t - DEMO_REF))).replaceAll("-", "/");
-}
-const careOffset = (t: string) => (t.startsWith("今天") ? 0 : t.startsWith("昨天") ? 1 : 5);
-function careAt(t: string, i: number) {
-  const hm = t.match(/(\d{1,2}):(\d{2})/);
-  const day = taipeiDate(new Date(Date.now() - careOffset(t) * 864e5));
-  const at = hm ? Date.parse(`${day}T${hm[1].padStart(2, "0")}:${hm[2]}:00+08:00`) : NaN;
-  const fallback = Date.now() - careOffset(t) * 864e5 - (i + 1) * 10 * 60_000;
-  return new Date(Number.isNaN(at) || at > Date.now() ? fallback : at).toISOString();
-}
-const convAt = (i: number) => ago(i * 0.3 + 0.01);
-
-export const DEMO_MANAGER_EMAIL = "demo@langlang.test";
-
-export async function seedDemo(managerPassword: string) {
-  const db = getDb();
-  for (const s of demoShelters) {
-    const doc: ShelterDoc = {
-      id: s.id, name: s.name, area: s.area, intro: s.intro, hours: s.hours, phone: "", codePrefix: PREFIX[s.id] ?? "LL",
-      areas: AREAS[s.id] ?? [], faq: FAQ, plan: s.plan, due: s.due, status: s.status,
-    };
-    await db.set(`shelters/${s.id}`, doc);
-    await db.set(`shelters/${s.id}/counters/animal`, { n: 400 });
-  }
-
-  await db.set(`managers/${DEMO_MANAGER_EMAIL}`, { email: DEMO_MANAGER_EMAIL, name: "周怡君", sid: "nuanwo", passwordHash: hashPassword(managerPassword) });
-
-  for (const st of demoStaff) {
-    const code = CODES[st.code] ?? st.code;
-    const doc: StaffDoc = { code, name: st.name, role: st.role as StaffDoc["role"], area: st.area, disabled: false };
-    await db.set(`shelters/nuanwo/staff/${code}`, doc);
-  }
-
-  for (const a of demoAnimals) {
-    const doc: AnimalDoc = {
-      id: a.id, code: a.code, name: a.name, kind: a.kind, sex: a.sex, age: a.age, ageGroup: a.ageGroup, size: a.size, coat: a.coat, foundAt: "",
-      area: a.area, neutered: a.neutered ? "是" : "否", status: a.status, intakeAt: ago(a.days), vaccineDue: shiftDue(a.vaccineDue), traits: a.traits, story: a.story,
-      needs: a.needs, goodFor: a.goodFor, photos: [], color: a.color, bg: a.bg, tags: DEMO_TAGS[a.id] ?? { energy: "未知", beginnerOk: "未知", kidOk: "未知", apartmentOk: "未知" },
-      published: false,
-      ...(DEMO_MODELS[a.id] ? { model3d: DEMO_MODELS[a.id] } : {}),
-    };
-    await db.set(`shelters/${a.shelterId}/animals/${a.id}`, doc);
-    if (a.status === "開放領養") await publishAnimal(a.shelterId, a.id);
-    let i = 0;
-    for (const c of a.care) {
-      const id = `${a.id}-${i}`;
-      await db.set(`shelters/${a.shelterId}/care/${id}`, {
-        id, animalId: a.id, at: careAt(c.time, i++), who: c.who, text: c.text,
-        category: /吃|餐/.test(c.text) ? "食慾" : /便/.test(c.text) ? "排便" : "其他", concerning: Boolean(c.flag),
-      });
-    }
-    if (a.flagged) await db.update(`shelters/${a.shelterId}/animals/${a.id}`, { flaggedUntil: new Date(Date.now() + 3 * 864e5).toISOString(), flagNote: a.note });
-  }
-
-  for (const ap of demoApps) {
-    const animal = demoAnimals.find((x) => x.id === ap.animalId);
-    const doc: ApplicationDoc = {
-      id: ap.id, publicCode: `LL-DEM22${demoApps.indexOf(ap) + 2}`, animalId: ap.animalId, animalName: animal?.name ?? "", who: ap.who, phone: "0900-000-000（虛構）",
-      housing: ap.home, family: "—", plan: ap.exp, message: "", status: ap.status as ApplicationDoc["status"], createdAt: ago(demoApps.indexOf(ap) + 1), score: ap.match, reason: ap.reason,
-    };
-    await db.set(`shelters/nuanwo/applications/${ap.id}`, doc);
-  }
-
-  for (const c of demoConvs) {
-    const doc: ConversationDoc = {
-      id: c.id, displayName: c.who, tag: c.tag as ConversationDoc["tag"], status: c.status as ConversationDoc["status"], lastAt: convAt(demoConvs.indexOf(c)),
-      messages: [{ at: convAt(demoConvs.indexOf(c)), from: "user", text: c.last }, { at: convAt(demoConvs.indexOf(c)), from: "ai", text: c.ai }],
-    };
-    await db.set(`shelters/nuanwo/conversations/${c.id}`, doc);
-  }
-  await seedHistory();
-  await seedSupplies();
-  await seedAreaReports();
-}
-
-// 有「今天」照護紀錄的區域，標成今天已回報，總覽的「現場回報狀況」才會和「需要留意」一致。
-async function seedAreaReports() {
-  const today = taipeiDate();
-  for (const a of demoAnimals) {
-    const c = a.care.find((x) => x.time.startsWith("今天"));
-    if (!c || !a.area) continue;
-    await getDb().set(`shelters/${a.shelterId}/areaReports/${today}__${a.area}`, { date: today, area: a.area, who: c.who, at: careAt(c.time, 0) });
-  }
-}
-
-// 虛構的物資需求和捐贈登記。用固定 ID，已存在就只更新日期，不會覆蓋協會改過的數量。
-const DEMO_SUPPLIES = [
-  { sid: "nuanwo", id: "5d1f0c3e-1a2b-4c3d-8e4f-000000000001", name: "成犬乾糧", unit: "包", need: 20, got: 6, note: "15 公斤裝，未開封", urgent: true },
-  { sid: "nuanwo", id: "5d1f0c3e-1a2b-4c3d-8e4f-000000000002", name: "尿布墊", unit: "包", need: 30, got: 12, note: "L 號以上", urgent: false },
-  { sid: "nuanwo", id: "5d1f0c3e-1a2b-4c3d-8e4f-000000000003", name: "牽繩和項圈", unit: "組", need: 10, got: 3, note: "中大型犬用", urgent: false },
-  { sid: "shanqiu", id: "5d1f0c3e-1a2b-4c3d-8e4f-000000000004", name: "老犬罐頭", unit: "箱", need: 8, got: 2, note: "", urgent: true },
-  { sid: "gangbian", id: "5d1f0c3e-1a2b-4c3d-8e4f-000000000005", name: "貓砂", unit: "包", need: 25, got: 10, note: "豆腐砂或礦砂皆可", urgent: false },
-];
-const DEMO_PLEDGES = [
-  { sid: "nuanwo", id: "5d1f0c3e-1a2b-4c3d-8e4f-0000000000a1", supply: 0, qty: 2, who: "林小姐（虛構）", contact: "line: demo-lin", note: "週六下午送過去", status: "待確認", days: 0.2 },
-  { sid: "nuanwo", id: "5d1f0c3e-1a2b-4c3d-8e4f-0000000000a2", supply: 1, qty: 5, who: "王先生（虛構）", contact: "0900-000-000", note: "", status: "已收到", days: 3 },
-];
-
-export async function seedSupplies() {
-  const db = getDb();
-  for (const s of DEMO_SUPPLIES) {
-    const path = `shelters/${s.sid}/supplies/${s.id}`;
-    const at = ago(2);
-    if (await db.get(path)) { await db.update(path, { updatedAt: at }); continue; }
-    const { sid: _sid, ...doc } = s;
-    await db.set(path, { ...doc, status: "需要", createdAt: ago(10), updatedAt: at });
-  }
-  for (const p of DEMO_PLEDGES) {
-    const path = `shelters/${p.sid}/pledges/${p.id}`;
-    const s = DEMO_SUPPLIES[p.supply];
-    if (await db.get(path)) { await db.update(path, { createdAt: ago(p.days) }); continue; }
-    await db.set(path, { id: p.id, supplyId: s.id, supplyName: s.name, unit: s.unit, qty: p.qty, who: p.who, contact: p.contact, note: p.note, status: p.status, createdAt: ago(p.days) });
-  }
-}
-
-/**
- * 把示範資料的日期更新到今天：收容天數、疫苗到期日、照護回報、申請和訊息時間、歷史領養紀錄。
- * 不會動到照片、AI 動態影片、人員綁定、協會設定，以及示範以外新增的資料。比賽評審前執行一次即可。
- */
-export async function refreshDemoDates() {
-  const db = getDb();
-  let n = 0;
-  for (const a of demoAnimals) {
-    const path = `shelters/${a.shelterId}/animals/${a.id}`;
-    const cur = await db.get<AnimalDoc>(path);
-    if (!cur) continue;
-    const patch: Record<string, unknown> = { intakeAt: ago(a.days), vaccineDue: shiftDue(a.vaccineDue) };
-    const model3d = DEMO_MODELS[a.id];
-    if (model3d && cur.model3d !== model3d) {
-      patch.model3d = model3d;
-      const pub = `publicAnimals/${publicId(a.shelterId, a.id)}`;
-      if (await db.get(pub)) await db.update(pub, { model3d });
-    }
-    if (a.flagged && cur.status !== "已領養") Object.assign(patch, { flaggedUntil: new Date(Date.now() + 3 * 864e5).toISOString(), flagNote: a.note });
-    await db.update(path, patch);
-    for (let i = 0; i < a.care.length; i++) {
-      const cp = `shelters/${a.shelterId}/care/${a.id}-${i}`;
-      if (await db.get(cp)) await db.update(cp, { at: careAt(a.care[i].time, i) });
-    }
-    n++;
-  }
-  for (const ap of demoApps) {
-    const path = `shelters/nuanwo/applications/${ap.id}`;
-    if (await db.get(path)) await db.update(path, { createdAt: ago(demoApps.indexOf(ap) + 1) });
-  }
-  for (const c of demoConvs) {
-    const path = `shelters/nuanwo/conversations/${c.id}`;
-    const cur = await db.get<ConversationDoc>(path);
-    if (!cur) continue;
-    const at = convAt(demoConvs.indexOf(c));
-    // 只更新示範的兩則訊息，之後真的回覆過的訊息保留原本時間
-    await db.update(path, { lastAt: cur.messages.length > 2 ? cur.lastAt : at, messages: cur.messages.map((m, i) => (i < 2 ? { ...m, at } : m)) });
-  }
-  await seedHistory();
-  await seedSupplies();
-  await seedAreaReports();
-  return n;
-}
-
-// 過去幾個月的虛構領養紀錄、收費紀錄和公告，讓報表和總後台有內容可看。
-// 用固定 ID，重複執行不會重複新增，也不會動到人員綁定和新建的動物。
-const HISTORY_SURNAMES = ["陳先生", "林小姐", "黃先生", "張小姐", "吳先生", "劉小姐", "蔡先生"];
-const HISTORY_NAMES = ["大寶", "小花", "黑糖", "布丁", "饅頭", "可樂", "花生", "湯圓", "米漿", "雪球", "皮蛋", "咖啡", "肉圓", "柚子"];
-
-export async function seedHistory() {
-  const db = getDb();
-  const shelterIds = ["nuanwo", "shanqiu", "gangbian"];
-  const now = Date.now();
-  for (let i = 0; i < HISTORY_NAMES.length; i++) {
-    const sid = shelterIds[i % shelterIds.length];
-    const adoptedDaysAgo = 2 + i * 11;
-    const stayed = 40 + ((i * 37) % 260);
-    const id = `history-${i}`;
-    const doc: AnimalDoc = {
-      id, code: `${PREFIX[sid]}-0${100 + i}`, name: HISTORY_NAMES[i], kind: i % 3 === 2 ? "貓" : "狗", sex: i % 2 ? "母" : "公", age: "", ageGroup: "成年",
-      size: "中型", coat: "", foundAt: "", area: "", neutered: "是", status: "已領養", intakeAt: new Date(now - (adoptedDaysAgo + stayed) * 864e5).toISOString(),
-      adoptedAt: new Date(now - adoptedDaysAgo * 864e5).toISOString(), vaccineDue: "", traits: [], story: "", needs: [], goodFor: [], photos: [],
-      tags: { energy: "未知", beginnerOk: "未知", kidOk: "未知", apartmentOk: "未知" }, published: false,
-    };
-    await db.set(`shelters/${sid}/animals/${id}`, doc);
-    // 每筆過去的領養都配一份通過的申請，隔一筆再多一份沒通過的，報表的「每月領養申請」才不會是 0。
-    const apps: { status: ApplicationDoc["status"]; before: number }[] = [{ status: "已通過", before: 12 }, ...(i % 2 ? [{ status: "未通過" as const, before: 20 }] : [])];
-    for (const [k, ap] of apps.entries()) {
-      const app: ApplicationDoc = {
-        id: `history-app-${i}-${k}`, publicCode: `LL-HIST${"ABCDEFGHJKLMNPQRSTUVWXYZ"[i]}${k + 2}`, animalId: id, animalName: doc.name,
-        who: `${HISTORY_SURNAMES[(i + k) % HISTORY_SURNAMES.length]}（虛構）`, phone: "0900-000-000（虛構）", housing: "公寓或大樓", family: "—", plan: "養過貓或狗", message: "",
-        status: ap.status, createdAt: new Date(now - (adoptedDaysAgo + ap.before) * 864e5).toISOString(), score: ap.status === "已通過" ? 80 : 45, reason: "",
-      };
-      await db.set(`shelters/${sid}/applications/${app.id}`, app);
-    }
-  }
-  const month =(offset: number) => { const d = new Date(now); d.setMonth(d.getMonth() - offset); return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}`; };
-  const invoices = [
-    { id: "demo-inv-1", sid: "shanqiu", shelterName: "山丘毛孩之家", period: month(1), plan: "進階", amount: 980, state: "已收款" },
-    { id: "demo-inv-2", sid: "nuanwo", shelterName: "暖窩動物協會", period: month(1), plan: "基本", amount: 490, state: "已收款" },
-    { id: "demo-inv-3", sid: "daotian", shelterName: "稻田狗狗中途", period: month(0), plan: "基本", amount: 490, state: "待收款" },
+/** 把虛構單據畫成一張像收據的圖片。 */
+async function receiptImage(r: Receipt) {
+  const lines = [
+    ...r.items.map(([a, b]) => `${a}${b ? `（${b}）` : ""}`),
+    ...r.meds.map(([a, b]) => `藥品：${a}　${b}`),
+    ...(r.follow !== undefined ? [`回診日期：${day(r.follow).replaceAll("-", "/")}`] : []),
   ];
-  for (const inv of invoices) await db.set(`invoices/${inv.id}`, { ...inv, at: new Date(now - 5 * 864e5).toISOString() });
-  await db.set("announcements/demo-welcome", { id: "demo-welcome", at: new Date(now - 864e5).toISOString(), text: "歡迎使用浪浪夥伴！「AI 建議」頁新增本週重點整理，可以直接貼到協會群組。" });
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${560 + lines.length * 52}">
+  <rect width="100%" height="100%" fill="#fbfaf6"/>
+  <g font-family="Microsoft JhengHei, Noto Sans TC, PingFang TC, sans-serif" fill="#222">
+    <text x="60" y="90" font-size="40" font-weight="700">示範動物醫院（虛構）</text>
+    <text x="60" y="140" font-size="26" fill="#555">診療明細　　飼主：示範飼主　　病患：麻糬（貓）</text>
+    <text x="60" y="190" font-size="26" fill="#555">看診日期：${day(r.date).replaceAll("-", "/")}</text>
+    <line x1="60" y1="220" x2="840" y2="220" stroke="#999" stroke-width="2"/>
+    ${lines.map((l, i) => `<text x="60" y="${280 + i * 52}" font-size="30">${esc(l)}</text>`).join("")}
+    <line x1="60" y1="${300 + lines.length * 52}" x2="840" y2="${300 + lines.length * 52}" stroke="#999" stroke-width="2"/>
+    <text x="60" y="${360 + lines.length * 52}" font-size="34" font-weight="700">合計　NT$ ${r.total.toLocaleString()}</text>
+    <text x="60" y="${430 + lines.length * 52}" font-size="22" fill="#888">此單據為「從此有你」示範用的虛構資料</text>
+  </g></svg>`;
+  return sharp(Buffer.from(svg)).jpeg({ quality: 88 }).toBuffer();
+}
+
+export async function seedDemo() {
+  const db = getDb();
+  const uid = DEMO_UID;
+  const owner: OwnerDoc = { uid, displayName: "示範飼主", createdAt: iso(-400), state: { mode: "none" } };
+  await db.set(`owners/${uid}`, owner);
+
+  const afuPhoto = await savePhoto(uid, readFileSync(join(/*turbopackIgnore: true*/ process.cwd(), "demo", "assets", "afu.jpg")));
+  const pets: PetDoc[] = [
+    { id: "demo-mochi", name: "麻糬", kind: "貓", sex: "母", birth: "2019-04", neutered: true, chipped: true, status: "在世", createdAt: iso(-400) },
+    { id: "demo-afu", name: "阿福", kind: "狗", size: "大型", sex: "公", birth: "2012-06", photo: afuPhoto, status: "已離開", passedAt: iso(-60), createdAt: iso(-399) },
+  ];
+  for (const p of pets) await db.set(`owners/${uid}/pets/${p.id}`, p);
+
+  for (const r of RECEIPTS) {
+    const photo = await savePhoto(uid, await receiptImage(r));
+    const doc: RecordDoc = {
+      id: r.id, petId: "demo-mochi", photo, createdAt: iso(r.date), isMedicalDoc: true,
+      visitDate: day(r.date), clinic: "示範動物醫院（虛構）", followUp: r.follow !== undefined ? day(r.follow) : "",
+      items: r.items.map(([name, note]) => ({ name, note })), meds: r.meds.map(([name, usage]) => ({ name, usage })),
+      total: r.total, terms: r.terms.map(([term, plain]) => ({ term, plain })),
+    };
+    await db.set(`owners/${uid}/records/${r.id}`, doc);
+    if (doc.followUp) {
+      const rem: ReminderDoc = { id: r.id, uid, petId: "demo-mochi", petName: "麻糬", date: doc.followUp, text: `麻糬明天要回診：${doc.clinic}。`, sent: false };
+      await db.set(`reminders/${r.id}`, rem);
+    }
+  }
+
+  // 照顧日曆：驅蟲快到了、疫苗還早、健檢已經超過幾天，三種狀態都看得到。
+  const care: [string, CareItem["kind"], string, number, number][] = [
+    ["demo-care-deworm", "驅蟲", "體內外寄生蟲預防", 1, -25],
+    ["demo-care-vaccine", "疫苗", "疫苗補強", 12, -200],
+    ["demo-care-check", "健康檢查", "健康檢查", 12, -370],
+  ];
+  for (const [id, kind, label, everyMonths, offset] of care) {
+    const nextDue = addMonths(day(offset), everyMonths);
+    const doc: CareItem = { id, uid, petId: "demo-mochi", petName: "麻糬", kind, label, everyMonths, lastDone: day(offset), nextDue, remindedFor: nextDue, createdAt: iso(-300) };
+    await db.set(`care/${id}`, doc);
+  }
+  // 小學堂：已經上過兩課。麻糬已結紮、已登記，那兩課不會出現。
+  const progress: LessonProgress[] = [{ id: "adult-weight", correct: false, at: iso(-40) }, { id: "adult-teeth", correct: true, at: iso(-10) }];
+  for (const old of await db.list<LessonProgress>(`owners/${uid}/learn`)) await db.delete(`owners/${uid}/learn/${old.id}`);
+  for (const p of progress) await db.set(`owners/${uid}/learn/${p.id}`, p);
+
+  const answers: AssessAnswers = {
+    kind: "還沒決定", alone: "8～10 小時", activity: "30 分鐘～1 小時", travel: "每月 1～2 次", budget: "2,000～4,000 元", fund: "1 萬元以內",
+    housing: "租屋，還沒問房東", space: "公寓或大樓", family: [], otherPets: "沒有", changes: ["可能搬家"], experience: "養過貓或狗", backup: "朋友",
+    ownerHealth: "應該可以", reason: "想了很久",
+  };
+  const result = assessReadiness(answers);
+  const assessment: AssessmentDoc = {
+    id: "demo-assess-1", at: iso(-420), answers, result,
+    report: {
+      summary: `你的準備度是「${result.verdict}」。最需要先處理的是房東還沒確認，以及白天不在家的時間比較長。`,
+      strengths: ["你養過貓狗，知道日常照顧要花多少心力。", "已經有朋友可以在你出差時幫忙。"],
+      prepare: ["先請房東同意，最好寫在租約上。", "每月固定存一筆醫療預備金，先存到 3 萬元。", "找房子時把「可以養寵物」列為必要條件。"],
+      ifNotReady: ["房東同意後，準備度就會明顯提高。", "如果白天不在家的時間長，可以考慮比較能獨處的成貓。"],
+    },
+  };
+  await db.set(`owners/${uid}/assessments/${assessment.id}`, assessment);
+  void lifetimeCost(costProfileOf(result.fit));
+
+  // 生活變動檢查：麻糬一個多月後要搬家，新房東還沒確認。
+  const changeAnswers: ChangeAnswers = { petKind: "貓", change: "搬家", when: "一到三個月", date: day(40), detail: "還不確定", helper: "朋友", worry: "有點擔心", note: "新家離公司比較近，但還沒問房東能不能養貓。" };
+  const change: ChangeDoc = {
+    id: "demo-change-1", at: iso(-3), petId: "demo-mochi", petName: "麻糬", answers: changeAnswers, plan: planChange(changeAnswers),
+    aiNote: "搬家是很多人和毛孩分開的時候，你提早想到麻糬，已經走在前面了。現在最重要的一件事，是在簽約前先問清楚新房東能不能養貓，最好寫進租約；只要這一步確認了，其他像更新晶片地址、找新家附近的動物醫院，都可以慢慢來。",
+    remindOn: changeReminder(changeAnswers, "麻糬", day(0))?.on,
+  };
+  await db.set(`owners/${uid}/changes/${change.id}`, change);
+
+  const memorial: MemorialDoc = {
+    id: "demo-memorial-afu", uid, petId: "demo-afu", petName: "阿福", kind: "狗", heightCm: 65,
+    photos: [afuPhoto], glb: "/models/afu-v2.glb", status: "完成",
+    memories: "每天傍晚一定要去河堤散步，走到一半會停下來回頭確認我有沒有跟上。最喜歡趴在陽台曬太陽，聽到塑膠袋的聲音就會衝過來。",
+    tribute: "阿福是個很有原則的大個子。每天傍晚，河堤散步是牠一定要守住的約定，走到一半還會停下來回頭，確認你有沒有跟上。午後的陽台是牠的地盤，一趴就是一個下午；但只要廚房傳來塑膠袋的聲音，牠總是第一個衝過來。十四年的日子裡，你陪牠走過每一段河堤，也陪牠走完了最後一段路。謝謝你，讓牠這一生都有人等、有人陪。",
+    tributeOk: true, createdAt: iso(-55), updatedAt: iso(-55),
+  };
+  await db.set(`memorials/${memorial.id}`, memorial);
 }

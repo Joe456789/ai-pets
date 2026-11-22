@@ -1,4 +1,6 @@
-// 兩套圖文選單的定義。圖片由 scripts/render-rich-menus.mjs 產生，格子順序要一致。
+// 飼主圖文選單的定義。圖片由 scripts/render-rich-menus.mjs 產生，格子順序要一致。
+import { liffUrl } from "@/lib/line/messages";
+
 const W = 2500;
 const H = 1686;
 const COL = [0, 833, 1667, W];
@@ -7,6 +9,7 @@ const ROW = [0, 843, H];
 type Action = { type: "postback"; data: string; displayText: string } | { type: "uri"; uri: string };
 
 const postback = (data: string, displayText: string): Action => ({ type: "postback", data, displayText });
+const open = (path: string): Action => ({ type: "uri", uri: liffUrl(path) });
 
 function grid(actions: Action[]) {
   return actions.map((action, i) => {
@@ -16,21 +19,13 @@ function grid(actions: Action[]) {
   });
 }
 
-export const STAFF_MENU_ITEMS = ["新增動物", "回報照護", "查詢動物", "今日摘要", "我的資料", "使用說明"];
-export const ADOPTER_MENU_ITEMS = ["看領養動物", "常見問題", "申請進度", "問照顧問題", "聯絡協會", "分享近況"];
+// 醫療紀錄在「我的毛孩」底下；使用說明改成在聊天室打「說明」。
+export const OWNER_MENU_ITEMS = ["飼養前評估", "我的毛孩", "拍醫療單據", "照顧日曆", "飼主小學堂", "紀念與告別"];
 
-export const staffMenu = () => ({
-  size: { width: W, height: H }, selected: true, name: "浪浪夥伴 現場人員", chatBarText: "工作選單",
+export const ownerMenu = () => ({
+  size: { width: W, height: H }, selected: true, name: "從此有你", chatBarText: "選單",
   areas: grid([
-    postback("a=intake", "新增動物"), postback("a=care", "回報照護"), postback("a=lookup", "查詢動物"),
-    postback("a=digest", "今日摘要"), postback("a=me", "我的資料"), postback("a=help", "使用說明"),
-  ]),
-});
-
-export const adopterMenu = (appUrl: string, sid: string) => ({
-  size: { width: W, height: H }, selected: true, name: "浪浪夥伴 領養人", chatBarText: "選單",
-  areas: grid([
-    { type: "uri", uri: `${appUrl}/adopt/shelters/${sid}` }, postback("a=faq", "常見問題"), postback("a=progress", "申請進度"),
-    postback("a=askcare", "問照顧問題"), postback("a=contact", "聯絡協會"), postback("a=share", "分享近況"),
+    open("/assess"), open("/me"), postback("a=record", "拍醫療單據"),
+    open("/care"), postback("a=lesson", "飼主小學堂"), open("/memorial"),
   ]),
 });

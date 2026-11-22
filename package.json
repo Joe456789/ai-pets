@@ -1,5 +1,5 @@
 {
-  "name": "langlang-partner",
+  "name": "congci-youni",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,20 +9,15 @@
     "test": "vitest run",
     "render:richmenu": "node scripts/render-rich-menus.mjs",
     "setup:line": "tsx --env-file=.env.local scripts/setup-line.ts",
-    "seed": "tsx --env-file=.env.local scripts/seed.ts",
-    "create-admin": "tsx --env-file=.env.local scripts/create-admin.ts",
-    "seed:history": "tsx --env-file=.env.local scripts/seed-history.ts",
-    "warm:on": "gcloud run services update langlang-partner --project langlang-partner-2026 --region asia-east1 --min-instances 1",
-    "warm:off": "gcloud run services update langlang-partner --project langlang-partner-2026 --region asia-east1 --min-instances 0",
-    "dev:local": "set LL_LOCAL_DATA=1&& next dev -p 3100",
-    "demo:refresh": "tsx --env-file=.env.local scripts/refresh-demo.ts"
+    "demo:seed": "tsx --env-file=.env.local scripts/demo-seed.ts",
+    "dev:local": "set LL_LOCAL_DATA=1&& next dev -p 3100"
   },
   "dependencies": {
     "@google-cloud/firestore": "^9.4.0",
     "@google-cloud/storage": "^8.4.0",
     "@google/genai": "^2.32.0",
     "@google/model-viewer": "4.3.1",
-    "@mediapipe/tasks-vision": "0.10.35",
+    "@line/liff": "^2.32.0",
     "next": "^16.4.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

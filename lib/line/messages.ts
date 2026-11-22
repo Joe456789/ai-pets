@@ -1,14 +1,21 @@
 import { HEALTH_NOTICE } from "@/lib/constants";
 import type { LineMessage } from "@/lib/line/client";
-import { daysSince } from "@/lib/time";
-import type { AnimalDoc, ApplicationDoc, CareDoc, CareDraft, IntakeDraft, ShelterDoc, StaffDoc } from "@/lib/types";
+import { quizOf, type Lesson } from "@/lib/lessons";
+import type { CareItem, PetDoc, RecordDraft, ReminderDoc } from "@/lib/types";
 
+const ROSE = "#B5523B";
 const MOSS = "#2F5D50";
-const CLAY = "#BD5A33";
 const INK = "#26302B";
 const MUTED = "#6B736D";
 
-type Button = { label: string; data: string; primary?: boolean };
+/** LINE 裡打開網頁用 LIFF 網址，這樣網頁會自動知道是哪位飼主。沒有設定 LIFF 時退回一般網址。 */
+export function liffUrl(path: string) {
+  const id = process.env.LIFF_ID;
+  if (id) return `https://liff.line.me/${id}${path}`;
+  return `${(process.env.APP_URL ?? "").replace(/\/$/, "")}${path}`;
+}
+
+type Button = { label: string; data?: string; uri?: string; primary?: boolean };
 
 export function text(body: string, quick?: { label: string; data?: string; text?: string }[]): LineMessage {
   const msg: LineMessage = { type: "text", text: body.slice(0, 4900) };
@@ -30,123 +37,123 @@ function row(key: string, value: string) {
     type: "box", layout: "baseline", spacing: "md",
     contents: [
       { type: "text", text: key, size: "sm", color: MUTED, flex: 3, wrap: true },
-      { type: "text", text: value || "未填寫", size: "sm", color: value ? INK : MUTED, flex: 5, wrap: true, align: "end" },
+      { type: "text", text: value || "—", size: "sm", color: value ? INK : MUTED, flex: 6, wrap: true, align: "end" },
     ],
   };
 }
 
-export function card(opts: { alt: string; head: string; alert?: boolean; rows?: [string, string][]; note?: string; notice?: boolean; buttons?: Button[] }): LineMessage {
+export function card(opts: { alt: string; head: string; tone?: "rose" | "moss"; rows?: [string, string][]; note?: string; notice?: boolean; buttons?: Button[] }): LineMessage {
   const body: unknown[] = (opts.rows ?? []).map(([k, v]) => row(k, v));
-  if (opts.note) body.push({ type: "text", text: opts.note, size: "sm", color: INK, wrap: true });
+  if (opts.note) body.push({ type: "text", text: opts.note, size: "sm", color: INK, wrap: true, margin: body.length ? "md" : undefined });
   if (opts.notice) body.push({ type: "text", text: HEALTH_NOTICE, size: "xxs", color: MUTED, wrap: true, margin: "md" });
   const bubble: Record<string, unknown> = {
     type: "bubble",
     header: {
-      type: "box", layout: "vertical", backgroundColor: opts.alert ? CLAY : MOSS, paddingAll: "12px",
+      type: "box", layout: "vertical", backgroundColor: opts.tone === "moss" ? MOSS : ROSE, paddingAll: "12px",
       contents: [{ type: "text", text: opts.head, color: "#FFFFFF", weight: "bold", size: "md", wrap: true }],
     },
     body: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px", contents: body.length ? body : [{ type: "text", text: " " }] },
   };
   if (opts.buttons?.length) {
     bubble.footer = {
-      type: "box", layout: "horizontal", spacing: "sm",
+      type: "box", layout: "vertical", spacing: "sm",
       contents: opts.buttons.map((b) => ({
-        type: "button", style: b.primary ? "primary" : "secondary", color: b.primary ? MOSS : undefined, height: "sm",
-        action: { type: "postback", label: b.label, data: b.data, displayText: b.label },
+        type: "button", style: b.primary ? "primary" : "secondary", color: b.primary ? ROSE : undefined, height: "sm",
+        action: b.uri ? { type: "uri", label: b.label, uri: b.uri } : { type: "postback", label: b.label, data: b.data, displayText: b.label },
       })),
     };
   }
   return { type: "flex", altText: opts.alt.slice(0, 390), contents: bubble };
 }
 
-export const bindOkCard = (staff: StaffDoc, shelter: ShelterDoc) =>
-  card({
-    alt: `綁定成功：${staff.name}`, head: "綁定成功",
-    rows: [["姓名", staff.name], ["協會", shelter.name], ["負責區域", staff.area]],
-    note: "下方已切換成工作選單。這組工作號已綁定你的 LINE 帳號，其他人無法再使用。",
-  });
+export const WELCOME =
+  "歡迎來到「從此有你」。\n\n從決定要不要養、照顧牠一輩子，到最後好好說再見，我們都陪著你。\n\n・飼養前評估：先想清楚時間、經濟、住處和家人\n・生活變動檢查：搬家、懷孕、出國時，幫你一步步準備\n・照顧日曆：驅蟲、疫苗、健檢，前一天用 LINE 提醒\n・飼主小學堂：依毛孩的月齡和季節，在對的時候上對的課\n・醫療單據：拍下看診單據，AI 幫你整理成紀錄\n・紀念與告別：用照片為離開的牠做一個 3D 紀念\n\n從下方選單開始，隨時打「說明」可以看使用說明。";
 
-export const intakeDraftCard = (d: IntakeDraft, token: string, photoCount: number) =>
-  card({
-    alt: "AI 整理好動物檔案，請確認", head: "AI 整理好了，請確認",
-    rows: [
-      ["名字", d.name || "待取名"], ["種類", d.kind], ["性別", d.sex], ["年齡", d.age], ["體型", d.size], ["毛色", d.coat],
-      ["發現地點", d.foundAt], ["絕育", d.neutered], ["個性", d.traits.join("、")], ["照片", `${photoCount} 張`],
-      ...(d.notes ? ([["備註", d.notes]] as [string, string][]) : []),
-    ],
-    buttons: [{ label: "確認存檔", data: `a=intake_ok&t=${token}`, primary: true }, { label: "修改", data: `a=intake_edit&t=${token}` }, { label: "取消", data: "a=cancel" }],
-  });
+export const HELP =
+  "使用說明\n\n【飼養前評估】回答 15 個問題，得到準備度報告和一輩子花費的粗估。\n【生活變動檢查】已經在養的人，遇到搬家、懷孕、出國、工作變忙時做，拿到分階段的準備清單；填了日期會在前一週提醒你。也可以直接在聊天室打「我要搬家」。\n【我的毛孩】新增或編輯毛孩，每隻都有醫療紀錄。\n【拍醫療單據】選毛孩後傳單據照片，AI 照原文整理，確認後才存檔；有回診日會在前一天提醒你。\n【照顧日曆】加入驅蟲、疫苗、健康檢查，到期前一天提醒，按「完成了」就幫你算下一次。\n【飼主小學堂】依毛孩的月齡排課：疫苗、結紮、老年健檢這類有時機的課，時間到了就推給你；平常每月一課，換季時有季節課。附小測驗，打「小學堂」隨時再來一課。\n【紀念與告別】上傳照片，為離開的毛孩做 3D 紀念。\n\n" + HEALTH_NOTICE;
 
-export function careDraftCard(d: CareDraft, names: Map<string, string>, token: string) {
+export function linkCard(head: string, note: string, label: string, path: string): LineMessage {
+  return card({ alt: head, head, note, buttons: [{ label, uri: liffUrl(path), primary: true }] });
+}
+
+export function pickPet(pets: PetDoc[], action: string, prompt: string): LineMessage {
+  return text(prompt, pets.slice(0, 12).map((p) => ({ label: p.name, data: `a=${action}&p=${p.id}` })));
+}
+
+export function recordDraftCard(d: RecordDraft, petName: string, token: string): LineMessage {
   const rows: [string, string][] = [
-    ...d.areas.map((a): [string, string] => [a, "無異常回報"]),
-    ...d.entries.map((e): [string, string] => [e.animalId ? names.get(e.animalId) ?? e.mentionedName : `${e.mentionedName}（找不到）`, e.text]),
+    ["毛孩", petName],
+    ["看診日期", d.visitDate],
+    ["醫院", d.clinic],
+    ["項目", d.items.map((i) => (i.note ? `${i.name}（${i.note}）` : i.name)).join("\n")],
+    ["藥品", d.meds.map((m) => (m.usage ? `${m.name}：${m.usage}` : m.name)).join("\n")],
+    ["回診日", d.followUp],
+    ["金額", d.total ? `${d.total.toLocaleString()} 元` : ""],
   ];
-  const unresolved = d.entries.filter((e) => !e.animalId);
-  const note = unresolved.length
-    ? `有 ${unresolved.length} 筆對不上動物，存檔時會略過。${unresolved.flatMap((e) => e.candidates ?? []).length ? `同名：${unresolved.flatMap((e) => e.candidates ?? []).join("、")}，請改用編號再回報一次。` : "請確認名字或改用編號。"}`
-    : undefined;
+  const terms = d.terms.map((t) => `・${t.term}：${t.plain}`).join("\n");
   return card({
-    alt: "AI 整理好照護回報，請確認", head: `AI 拆成 ${rows.length} 筆，請確認`, rows, note,
-    buttons: [{ label: "確認", data: `a=care_ok&t=${token}`, primary: true }, { label: "重講一次", data: "a=care" }, { label: "取消", data: "a=cancel" }],
+    alt: `${petName}的醫療單據整理`, head: "AI 整理好了，請確認", tone: "moss", rows,
+    note: `${terms ? `名詞白話說明（一般意思，詳情請問你的獸醫）\n${terms}\n\n` : ""}內容照單據原文整理，不是診斷。有錯的話按「重拍」。`,
+    notice: true,
+    buttons: [{ label: "確認存檔", data: `a=record_ok&t=${token}`, primary: true }, { label: "重拍", data: `a=record_retry&t=${token}` }],
   });
 }
 
-export const careAlertCard = (name: string, category: string) =>
-  card({
-    alt: `請留意：${name}`, head: `請留意：${name}`, alert: true,
-    note: `紀錄顯示${name}連續 2 天有「${category}」方面的回報，建議持續留意，必要時諮詢獸醫。`, notice: true,
-  });
-
-export function animalCard(a: AnimalDoc, care: CareDoc[]) {
-  const latest = care[0];
+export function savedRecordCard(petName: string, petId: string, followUp: string): LineMessage {
   return card({
-    alt: `${a.name} ${a.code}`, head: `${a.name}　${a.code}`,
-    rows: [
-      ["狀態", a.status], ["區域", a.area], ["已收容", `${daysSince(a.intakeAt)} 天`], ["疫苗到期", a.vaccineDue],
-      ["最近回報", latest ? latest.text : "無異常回報"], ["前次回報", care[1]?.text ?? "—"],
+    alt: "已存檔", head: `已存到${petName}的醫療紀錄`, tone: "moss",
+    note: followUp ? `回診日 ${followUp.replaceAll("-", "/")}，前一天會提醒你。` : "之後可以在「醫療紀錄」看所有看診和花費。",
+    buttons: [{ label: "看醫療紀錄", uri: liffUrl(`/pets/${petId}/records`) }],
+  });
+}
+
+export function reminderCard(r: Pick<ReminderDoc, "text" | "petId" | "kind" | "path">): LineMessage {
+  if (r.kind === "生活變動") {
+    return card({ alt: r.text, head: "生活變動提醒", tone: "moss", note: r.text, buttons: [{ label: "打開準備清單", uri: liffUrl(r.path ?? "/me"), primary: true }] });
+  }
+  return card({ alt: r.text, head: "回診提醒", note: r.text, notice: true, buttons: [{ label: "看醫療紀錄", uri: liffUrl(`/pets/${r.petId}/records`) }] });
+}
+
+/** 文字裡提到生活變動時，請他做生活變動檢查。 */
+export const changeCard = () => linkCard(
+  "生活要有變動了嗎？",
+  "搬家、懷孕、出國、工作變忙、經濟變緊時，做一次「生活變動檢查」，三分鐘拿到分階段的準備清單，讓牠可以繼續留在你身邊。",
+  "開始檢查", "/change",
+);
+
+const slash = (d: string) => d.slice(5).replace("-", "/");
+
+export function careReminderCard(c: CareItem, today: string): LineMessage {
+  const when = c.nextDue === today ? "今天" : `明天（${slash(c.nextDue)}）`;
+  return card({
+    alt: `${c.petName}${when}該做${c.label}`, head: "照顧提醒", tone: "moss",
+    rows: [["毛孩", c.petName], ["項目", c.label], ["日期", when]],
+    note: "做完按「完成了」，我會幫你算下一次。間隔請照獸醫的建議。",
+    buttons: [{ label: "完成了", data: `a=care_done&c=${c.id}`, primary: true }, { label: "打開照顧日曆", uri: liffUrl("/care") }],
+  });
+}
+
+export function careDoneText(c: CareItem) {
+  return text(`記下來了：${c.petName}的${c.label}。\n下一次是 ${c.nextDue.replaceAll("-", "/")}，前一天會提醒你。`);
+}
+
+/** 小學堂卡片：重點加一題測驗，答案直接在聊天室按。 */
+export function lessonCard(l: Lesson, why: string, monthly = false): LineMessage {
+  const quiz = quizOf(l);
+  return card({
+    alt: `${monthly ? "本月小學堂" : "小學堂"}：${l.title}`, head: `${monthly ? "本月小學堂" : "小學堂"}：${l.title}`, tone: "moss",
+    note: `${why ? `（${why}）\n\n` : ""}${l.points.map((p) => `・${p}`).join("\n")}\n\n小測驗：${quiz.q}`,
+    buttons: [
+      ...quiz.options.map((o, i) => ({ label: o.slice(0, 20), data: `a=quiz&l=${l.id}&c=${i}` })),
+      { label: "看完整內容", uri: liffUrl(`/learn/${l.id}`) },
     ],
-    notice: care.some((c) => c.concerning),
   });
 }
 
-export function digestCard(d: { unreported: string[]; partial?: string[]; flagged: AnimalDoc[]; vaccines: AnimalDoc[]; pendingApps: unknown[]; pendingConvs: unknown[] }, dateLabel: string) {
-  const partial = d.partial ?? [];
+export function memorialReadyCard(petName: string, memorialId: string): LineMessage {
   return card({
-    alt: `今日摘要 ${dateLabel}`, head: `今日摘要　${dateLabel}`,
-    rows: [
-      ["尚未回報", d.unreported.join("、") || (partial.length ? "無" : "都回報了")],
-      ...(partial.length ? [["只有個別回報", partial.join("、")] as [string, string]] : []),
-      ["需留意", d.flagged.map((a) => `${a.name}（${a.flagNote ?? ""}）`).join("、") || "無"],
-      ["疫苗 14 天內到期", d.vaccines.map((a) => `${a.name} ${a.vaccineDue}`).join("、") || "無"],
-      ["待審申請", `${d.pendingApps.length} 件`],
-      ["待處理訊息", `${d.pendingConvs.length} 則`],
-    ],
-    note: "其餘動物為「無異常回報」，代表沒有人回報狀況，不等於確認健康。",
-    notice: d.flagged.length > 0,
+    alt: `${petName}的 3D 紀念完成了`, head: `${petName}的 3D 紀念完成了`,
+    note: "用你的照片重建的樣子，可以轉動看看，也可以用手機放在身邊。",
+    buttons: [{ label: "去看看牠", uri: liffUrl(`/memorial/${memorialId}`), primary: true }],
   });
 }
-
-export const staffInfoCard = (s: StaffDoc, shelter: ShelterDoc) =>
-  card({ alt: `我的資料：${s.name}`, head: "我的資料", rows: [["姓名", s.name], ["身分", s.role], ["工作號", s.code], ["協會", shelter.name], ["負責區域", s.area]] });
-
-export const STAFF_HELP = `使用說明
-
-新增動物：按「新增動物」，傳照片，再講一段話或打字說明。AI 整理好後要由你確認才會存檔。
-
-回報照護：按「回報照護」，只講有狀況的動物，例如「A 區都正常，小黑今天沒吃」。
-
-查詢動物：按「查詢動物」後輸入名字或編號。
-
-隨時可以傳「取消」結束目前的動作。`;
-
-export const applicationCard = (a: ApplicationDoc) => {
-  const next: Record<ApplicationDoc["status"], string> = {
-    待審核: "協會審核中，會再與你聯絡。", 面談中: "協會會與你約面談和互動時間。", 已通過: "恭喜！協會會與你確認帶牠回家的安排。", 未通過: "這次沒有通過，協會會說明原因，也歡迎再認識其他毛孩。",
-  };
-  return card({ alt: `申請進度：${a.status}`, head: `申請：${a.animalName}`, rows: [["申請編號", a.publicCode], ["目前進度", a.status]], note: next[a.status] });
-};
-
-export const healthNoticeCard = (body: string) => card({ alt: "建議諮詢獸醫", head: "建議諮詢獸醫", alert: true, note: body, notice: true });
-
-export const handoffCard = (shelterName: string) => card({ alt: "已轉給協會人員", head: "已轉給協會人員", rows: [["協會", shelterName], ["狀態", "等待人員回覆"]] });
