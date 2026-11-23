@@ -3,6 +3,7 @@ import { findBannedClaim } from "@/lib/ai/guard";
 import { addMonths, careSuggestions, dueLabel, nextDueOf, stageOf } from "@/lib/care";
 import { LESSONS, lessonsFor, nextLesson, quizOf } from "@/lib/lessons";
 import { verifySignature } from "@/lib/line/client";
+import { ASSESS_BASIS, CHANGE_BASIS, SOURCES } from "@/lib/evidence";
 import { CHANGE_KINDS, changeReminder, DETAILS, planChange } from "@/lib/lifeChange";
 import { lifetimeCost } from "@/lib/lifetimeCost";
 import { inLine, liffTarget } from "@/lib/liffState";
@@ -58,11 +59,11 @@ describe("飼養準備度", () => {
     expect(costProfileOf(r.fit)).toBe("小型犬");
   });
 
-  it("想送給別人是高風險，最多只到「再準備一下」", () => {
+  it("想送給別人：提醒先確認對方自己想養（研究沒有支持列為高風險）", () => {
     const r = assessReadiness({ ...ideal, reason: "想送給別人" });
-    expect(r.verdict).toBe("再準備一下");
-    expect(r.risks[0]).toMatchObject({ level: "高" });
-    expect(r.risks[0].text).toContain("禮物");
+    expect(r.risks).toHaveLength(1);
+    expect(r.risks[0]).toMatchObject({ level: "中" });
+    expect(r.risks[0].text).toContain("對方自己一直想養");
   });
 
   it("每天陪玩不到 30 分鐘：狗會扣分並提醒，還沒決定時建議養貓、活動量低", () => {
@@ -78,6 +79,19 @@ describe("飼養準備度", () => {
     expect(r.risks.some((x) => x.text.includes("獵物"))).toBe(true);
     expect(r.risks.find((x) => x.text.includes("接手"))?.level).toBe("高");
     expect(r.fit.age).toContain("老年");
+  });
+});
+
+describe("評估的依據", () => {
+  it("每一題、每一種變動都有依據，引用的出處都存在，每個出處都有被用到", () => {
+    const keys = Object.keys(ideal).sort();
+    expect(ASSESS_BASIS.map((b) => b.asks).sort()).toEqual(keys);
+    expect(CHANGE_BASIS.map((b) => b.asks).sort()).toEqual([...CHANGE_KINDS].sort());
+    const ids = new Set(SOURCES.map((s) => s.id));
+    const used = new Set([...ASSESS_BASIS, ...CHANGE_BASIS].flatMap((b) => b.sources).concat("twLaw"));
+    for (const id of used) expect(ids.has(id), id).toBe(true);
+    for (const id of ids) expect(used.has(id), id).toBe(true);
+    for (const s of SOURCES) expect(s.url).toMatch(/^https:\/\//);
   });
 });
 

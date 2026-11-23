@@ -37,7 +37,7 @@ export function ReportView({ result, cost, report, aiError }: { result: Readines
             </div>
           ))}
         </div>
-        <p className="tiny" style={{ marginTop: 10 }}>分數由固定規則計算（時間 20%、經濟 20%、居住 20%、家庭 15%、{result.dims.find((d) => d.key === "future")?.label ?? "未來變動"} 15%、支援 10%），AI 只負責寫說明。</p>
+        <p className="tiny" style={{ marginTop: 10 }}>分數由固定規則計算（時間 20%、經濟 20%、居住 20%、家庭 15%、{result.dims.find((d) => d.key === "future")?.label ?? "未來變動"} 15%、支援 10%），AI 只負責寫說明。<a href="/assess/basis">每一題的依據</a></p>
       </section>
 
       {result.risks.length > 0 && (

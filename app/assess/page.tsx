@@ -26,6 +26,7 @@ export default async function AssessPage() {
       {hasPet && changeCard}
       <PageHead title="飼養前評估" sub="貓狗會陪你 10 到 15 年。先花三分鐘想清楚時間、經濟、住處、家人和自己的未來，養了就能照顧牠一輩子。不用登入也能做。" />
       <AssessForm />
+      <p className="small muted" style={{ marginTop: 12 }}>每一題都有研究或專業建議當依據：<Link href="/assess/basis">看評估的依據</Link></p>
       {!hasPet && <div style={{ marginTop: 16 }}>{changeCard}</div>}
     </>
   );

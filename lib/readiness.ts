@@ -56,7 +56,8 @@ export function assessReadiness(x: AssessAnswers): ReadinessResult {
 
   // 未來變動與動機：養了就是十幾年，為什麼想養也決定了能不能撐過辛苦的時候。
   let future = 100;
-  if (x.reason === "想送給別人") { future -= 40; risks.push({ level: "高", text: "寵物不適合當成禮物：要照顧十幾年的是收到的人，請讓對方自己決定、自己準備。" }); }
+  // 研究發現被當成禮物的貓狗多數留在原本的家（ASPCA, Weiss 2013），所以不列高風險；重點是對方自己想養、也能照顧。
+  if (x.reason === "想送給別人") { future -= 15; risks.push({ level: "中", text: "送人之前，先確認對方自己一直想養、也有能力照顧十幾年；最好讓對方一起挑、一起準備，不要給驚喜。" }); }
   if (x.reason === "家裡小孩想要") { future -= 10; risks.push({ level: "中", text: "小孩想養時，每天照顧的通常是大人；先確認大人願意負責，小孩長大離家後也一樣。" }); }
   if (x.reason === "看到覺得很可愛") { future -= 15; risks.push({ level: "中", text: "因為可愛而想養很正常，但牠會長大、變老、生病；建議先等兩週，或去收容所當志工後再決定。" }); }
   if (x.changes.includes("可能搬家")) { future -= 15; risks.push({ level: "中", text: "近幾年可能搬家：找房子時要把「可以養寵物」列為必要條件。" }); }

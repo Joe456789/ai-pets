@@ -39,7 +39,7 @@ export function ChangeView({ plan, petName, change, aiNote, aiError, remindOn }:
       <section className="card">
         <h2>可以找誰幫忙</h2>
         <ul className="points small">{plan.help.map((h) => <li key={h}>{h}</li>)}</ul>
-        <p className="tiny" style={{ marginTop: 8 }}>程度和清單由固定規則整理，AI 只負責寫說明。每個家庭情況不同，請依實際狀況調整。</p>
+        <p className="tiny" style={{ marginTop: 8 }}>程度和清單由固定規則整理，AI 只負責寫說明。每個家庭情況不同，請依實際狀況調整。<a href="/assess/basis">為什麼是這些變動</a></p>
       </section>
       <Notice />
     </div>
