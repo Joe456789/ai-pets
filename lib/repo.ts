@@ -166,4 +166,32 @@ export async function claimNextMemorial(staleMs = 60 * 60 * 1000) {
   await updateMemorial(next.id, { status: "製作中" as MemorialStatus, error: "" });
   return next;
 }
+/**
+ * 刪除毛孩和跟牠有關的一切：醫療紀錄、回診和生活變動提醒、照顧日曆、生活變動清單、3D 紀念。
+ * 回傳要另外刪掉的檔案（照片、單據、模型）網址。
+ */
+export async function deletePet(uid: string, petId: string): Promise<string[]> {
+  const pet = await getPet(uid, petId);
+  if (!pet) return [];
+  const files: string[] = pet.photo ? [pet.photo] : [];
+  for (const r of await listRecords(uid, petId)) {
+    if (r.photo) files.push(r.photo);
+    await deleteRecord(uid, r.id);
+  }
+  await deleteCareForPet(uid, petId);
+  for (const c of await listChanges(uid)) {
+    if (c.petId !== petId) continue;
+    await db().delete(`owners/${uid}/changes/${c.id}`);
+    await db().delete(`reminders/chg-${c.id}`);
+  }
+  for (const m of await listMemorials(uid)) {
+    if (m.petId !== petId) continue;
+    files.push(...m.photos);
+    if (m.glb) files.push(m.glb);
+    await db().delete(`memorials/${m.id}`);
+  }
+  await db().delete(`owners/${uid}/pets/${petId}`);
+  return files;
+}
+
 export const newShareToken = () => randomBytes(12).toString("base64url");

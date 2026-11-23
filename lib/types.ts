@@ -46,6 +46,8 @@ export type OwnerState =
   | { mode: "record_photo"; petId: string }
   | { mode: "record_review"; petId: string; token: string; photo: string; draft: RecordDraft };
 
+export type Trait = "活潑好動" | "愛玩" | "黏人" | "愛撒嬌" | "獨立" | "膽小" | "愛睡覺" | "貪吃" | "好奇" | "安靜";
+
 export type PetDoc = {
   id: string;
   name: string;
@@ -58,6 +60,10 @@ export type PetDoc = {
   /** 已結紮、已植入晶片並登記：做過了，小學堂就不再推那一課。 */
   neutered?: boolean;
   chipped?: boolean;
+  /** 個性（最多 4 個）、喜歡的事、小習慣：3D 紀念的動作習慣和紀念文會用到。 */
+  traits?: Trait[];
+  likes?: string;
+  habits?: string;
   status: PetStatus;
   passedAt?: string;
   createdAt: string;

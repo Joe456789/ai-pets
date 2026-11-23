@@ -44,7 +44,13 @@ export function MemorialForm({ pets, initial }: { pets: PetOpt[]; initial?: stri
 
       <div className="field">
         <span>照片（1～4 張）</span>
-        <p className="tiny">第一張最重要：請選<b>站著、看得到全身的側面照</b>，3D 的身形會照這張做；其他角度（正面、背面）用來補臉和毛色。照片越清楚、越少遮擋越好。點照片可以設為第一張。</p>
+        <p className="tiny">第一張最重要：請選<b>站著、看得到全身的側面照</b>，3D 的身形會照這張做；其他角度（正面、背面）用來補臉和毛色。點照片可以設為第一張。</p>
+        <ul className="points tiny photo-tips">
+          <li><b>四隻腳分開、看得到腳掌</b>：腳黏在一起的照片，做出來跑跳時腳會變形。</li>
+          <li>鏡頭和牠差不多高，不要從上往下拍。</li>
+          <li>不要被人抱著、坐著或趴著；背景越單純越好。</li>
+          <li>照片清楚、光線夠，毛色才會像。</li>
+        </ul>
         {previews.length > 0 && (
           <div className="photo-grid">
             {/* eslint-disable-next-line @next/next/no-img-element */}

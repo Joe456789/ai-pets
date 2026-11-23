@@ -2,9 +2,10 @@
  * 動作控制：依移動速度和觸發的動作，算出每一格的姿勢參數（Frame）。
  * 所有數值都經過彈簧平滑，動作之間不會跳。
  */
-import { restFrame, type Frame } from "@/lib/petSkeleton";
+import { dutyOf, restFrame, type Frame } from "@/lib/petSkeleton";
 
-export type PetAct = "sit" | "hop" | "wag" | "tilt";
+/** sit 坐下、hop 原地開心跳兩下、jump 往前跳一大步、wag 搖尾巴、tilt 歪頭 */
+export type PetAct = "sit" | "hop" | "jump" | "wag" | "tilt";
 type Spring = { x: number; v: number };
 const sp = (x = 0): Spring => ({ x, v: 0 });
 
@@ -20,7 +21,7 @@ export function spring(s: Spring, target: number, omega: number, dt: number) {
 
 export type AnimState = {
   t: number; act: PetAct | null; actT: number;
-  sit: Spring; amp: Spring; trot: Spring; stride: Spring; look: Spring; tilt: Spring; nod: Spring; tailUp: Spring; wagAmp: Spring;
+  sit: Spring; amp: Spring; trot: Spring; gallop: Spring; stride: Spring; look: Spring; tilt: Spring; nod: Spring; tailUp: Spring; wagAmp: Spring;
   phase: number; freq: number; wag: number; breath: number;
   tiltDir: number; nextTilt: number; nextGlance: number; glance: number; glanceUntil: number;
   frame: Frame;
@@ -28,13 +29,49 @@ export type AnimState = {
 
 export const newAnim = (): AnimState => ({
   t: 0, act: null, actT: 0,
-  sit: sp(), amp: sp(), trot: sp(), stride: sp(), look: sp(), tilt: sp(), nod: sp(), tailUp: sp(), wagAmp: sp(0.15),
+  sit: sp(), amp: sp(), trot: sp(), gallop: sp(), stride: sp(), look: sp(), tilt: sp(), nod: sp(), tailUp: sp(), wagAmp: sp(0.15),
   phase: 0, freq: 1.6, wag: 0, breath: 0,
   tiltDir: 1, nextTilt: 5, nextGlance: 3, glance: 0, glanceUntil: 0,
   frame: restFrame(),
 });
 
-const ACT_LEN: Record<PetAct, number> = { sit: 3.4, hop: 1.1, wag: 1.8, tilt: 1.5 };
+const ACT_LEN: Record<PetAct, number> = { sit: 3.4, hop: 1.1, jump: 1.15, wag: 1.8, tilt: 1.5 };
+
+/**
+ * 往前跳的時間軸（秒）：蹲低蓄力 → 後腳蹬、前半身先抬起 → 空中收腳 → 前腳先落地 → 蹲一下緩衝。
+ * 回傳這一刻的身體高度、蹲低、前高後低、收腳，以及往前移動的速度（身高／秒）。
+ */
+export function jumpCurve(t: number) {
+  const C = 0.26, P = 0.4, L = 0.86, E = 1.15; // 蹲完、離地、落地、結束
+  const H = 0.34; // 最高點（身高的比例）
+  let lift = 0, crouch = 0, rock = 0, tuck = 0, fwd = 0;
+  if (t < C) {
+    const u = t / C;
+    crouch = 0.09 * Math.sin((u * Math.PI) / 2);
+    rock = -0.03 * u;
+  } else if (t < P) {
+    const u = (t - C) / (P - C);
+    crouch = 0.09 * (1 - u);
+    rock = -0.03 + 0.15 * u;
+    lift = 0.05 * u * u;
+    fwd = 1.6 * u;
+  } else if (t < L) {
+    const u = (t - P) / (L - P);
+    lift = 0.05 + (H - 0.05) * Math.sin(u * Math.PI) * (u < 0.5 ? 1 : 1 - 0.15 * (u - 0.5));
+    rock = 0.12 - 0.26 * u;
+    tuck = Math.sin(Math.min(1, u * 1.4) * Math.PI * 0.5) * (1 - Math.max(0, (u - 0.7) / 0.3));
+    fwd = 1.6;
+  } else if (t < E) {
+    const u = (t - L) / (E - L);
+    crouch = 0.07 * Math.sin(u * Math.PI);
+    rock = -0.14 * (1 - u);
+    fwd = 1.6 * (1 - u) * 0.4;
+  }
+  return { lift, crouch, rock, tuck, fwd };
+}
+
+/** 正在往前跳的話，這一刻要往前移動多快（身高／秒）；在 AR 場景裡讓牠真的跳過去。 */
+export const jumpTravel = (s: AnimState) => (s.act === "jump" ? jumpCurve(s.actT).fwd : 0);
 
 export function triggerAct(s: AnimState, act: PetAct) {
   s.act = act;
@@ -66,12 +103,16 @@ export function stepAnim(s: AnimState, dt: number, o: AnimInput): Frame {
   const act = s.act;
   const f = s.frame;
 
-  // 步伐：走路四隻腳輪流，快了變成對角線小跑；步長＝速度 × 腳踩地的時間，腳才不會滑
+  // 步伐：走路四隻腳輪流，快了變成對角線小跑，再快就是奔跑；步長＝速度 × 腳踩地的時間，腳才不會滑
   const trot = spring(s.trot, o.speed > 1.5 ? 1 : 0, 6, dt);
-  const beta = 0.62 - 0.12 * trot;
+  const gallop = spring(s.gallop, o.speed > 3.2 ? 1 : 0, 5, dt);
+  const beta = dutyOf(trot, gallop);
   if (moving) {
-    s.freq = Math.min(3.4, (1.0 + 0.6 * o.speed) * (1 - trot) + (2.3 + 0.3 * o.speed) * trot);
-    spring(s.stride, Math.min(0.42, (o.speed * beta) / s.freq), 14, dt);
+    const walkTrot = (1.0 + 0.6 * o.speed) * (1 - trot) + (2.3 + 0.3 * o.speed) * trot;
+    const maxStride = 0.42 + 0.1 * gallop;
+    // 步長到上限了就踩快一點，腳才不會在地上滑
+    s.freq = Math.max(Math.min(3.4, walkTrot * (1 - gallop) + 2.6 * gallop), (o.speed * beta) / maxStride);
+    spring(s.stride, Math.min(maxStride, (o.speed * beta) / s.freq), 14, dt);
   } else {
     spring(s.stride, 0, 8, dt);
     if (o.turning) s.freq = 2.2;
@@ -102,22 +143,38 @@ export function stepAnim(s: AnimState, dt: number, o: AnimInput): Frame {
   f.nod = spring(s.nod, act === "sit" ? -0.12 : moving ? 0.06 : 0, 5, dt) + amp * 0.03 * Math.sin(s.phase * Math.PI * 4);
 
   // 尾巴：平常慢慢搖，開心時翹起來快速搖
-  const happy = act === "wag" || act === "hop";
+  const happy = act === "wag" || act === "hop" || act === "jump";
   const run = trot > 0.5;
   f.wagAmp = spring(s.wagAmp, happy ? 0.5 : run ? 0.22 : 0.14, 6, dt);
   s.wag += dt * (happy ? 14 : run ? 8 : 3);
   f.tailUp = spring(s.tailUp, happy ? 0.6 : run ? 0.45 : 0.05, 5, dt);
   f.wag = s.wag;
 
-  // 跳兩下：先蹲、再跳
-  let lift = 0, crouch = 0;
+  // 跳兩下：先蹲、再跳；往前跳：照 jumpCurve 的時間軸
+  let lift = 0, crouch = 0, rock = 0, tuck = 0;
   if (act === "hop" && s.actT < 1.0) {
     const k = s.actT % 0.5;
     if (k < 0.12) crouch = 0.045 * Math.sin((Math.PI * k) / 0.12);
-    else lift = 0.13 * Math.sin((Math.PI * (k - 0.12)) / 0.38);
+    else {
+      const u = (k - 0.12) / 0.38;
+      lift = 0.13 * Math.sin(Math.PI * u);
+      tuck = 0.45 * Math.sin(Math.PI * u);
+      rock = 0.04 * Math.sin(Math.PI * u);
+    }
+  } else if (act === "jump") {
+    ({ lift, crouch, rock, tuck } = jumpCurve(s.actT));
   }
+  // 奔跑時身體一伸一縮：後腳往前收時弓背、伸展時拉直，前半身跟著一上一下
+  const g = gallop * amp;
+  const gp = s.phase * Math.PI * 2;
+  f.flex = g * 0.14 * Math.sin(gp + 0.6);
+  rock += g * 0.035 * Math.sin(gp - 0.9);
+  lift += g * 0.03 * Math.max(0, Math.sin(gp * 1 + 2.2));
   f.lift = lift;
   f.crouch = crouch;
+  f.rock = rock;
+  f.tuck = tuck;
+  f.gallop = gallop;
 
   s.breath += dt * (run ? 8 : moving ? 5 : 2.2);
   f.breath = s.breath;

@@ -50,6 +50,7 @@ export default async function MemorialPage({ params, searchParams }: { params: P
           {years && <p className="years">{years}</p>}
           {m.tributeOk && m.tribute && <p className="tribute">{m.tribute}</p>}
           <div className="row" style={{ marginTop: 16 }}>
+            {m.status === "完成" && m.glb && <Link className="btn primary" href={`/memorial/${m.id}/ar${!owner && t ? `?t=${t}` : ""}`}>打開鏡頭，讓{m.petName}陪你</Link>}
             {m.status === "完成" && m.glb && <RealSizeAr modelUrl={asset(m.glb)} heightCm={m.heightCm} name={m.petName} />}
             {editable && m.status === "失敗" && <ActionButton label="重新排隊" run={retryMemorialAction.bind(null, m.id)} />}
           </div>

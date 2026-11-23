@@ -65,8 +65,64 @@ export function solveKnee(hip: V, ankle: V, l1: number, l2: number, pole: number
   ankleOut.set(hip.x + dir.x * dist, hip.y + dir.y * dist, hip.z + dir.z * dist);
 }
 
-/** pos 必須已經 normalizeRig 過；rig 是 analyzeRig 的結果。 */
-export function buildSkeleton(pos: Float32Array, rig: RigInfo): Skel {
+/**
+ * 蒙皮權重沿著模型表面抹平：把位置相同的點（貼圖接縫會把一個點拆成好幾個）合成一個，
+ * 再讓每個點的權重往相鄰點的平均靠。骨頭交界不再有一條硬摺痕，腳擺動時大腿和身體之間會平順地拉開。
+ * 貼近地板的腳掌點不動，腳才踩得穩。
+ */
+export function smoothWeights(pos: Float32Array, index: ArrayLike<number> | null, dense: Float32Array, nb: number, pinned: Uint8Array, iterations = 10) {
+  const n = pos.length / 3;
+  // 合併位置相同的點
+  const key = new Map<string, number>();
+  const weld = new Int32Array(n);
+  let m = 0;
+  for (let i = 0; i < n; i++) {
+    const k = `${Math.round(pos[i * 3] * 2e4)},${Math.round(pos[i * 3 + 1] * 2e4)},${Math.round(pos[i * 3 + 2] * 2e4)}`;
+    let w = key.get(k);
+    if (w === undefined) { w = m++; key.set(k, w); }
+    weld[i] = w;
+  }
+  // 合併後的權重：同一位置的點取平均
+  const W = new Float32Array(m * nb), cnt = new Float32Array(m), pin = new Uint8Array(m);
+  for (let i = 0; i < n; i++) {
+    const w = weld[i];
+    cnt[w]++;
+    if (pinned[i]) pin[w] = 1;
+    for (let b = 0; b < nb; b++) W[w * nb + b] += dense[i * nb + b];
+  }
+  for (let w = 0; w < m; w++) for (let b = 0; b < nb; b++) W[w * nb + b] /= cnt[w];
+  // 相鄰關係（邊）
+  const tri = index ?? Array.from({ length: n }, (_, i) => i);
+  const edges = new Set<number>();
+  const ea: number[] = [], eb: number[] = [];
+  const addEdge = (a: number, b: number) => {
+    if (a === b) return;
+    const lo = Math.min(a, b), hi = Math.max(a, b), k = lo * m + hi;
+    if (edges.has(k)) return;
+    edges.add(k); ea.push(lo); eb.push(hi);
+  };
+  for (let t = 0; t + 2 < tri.length; t += 3) {
+    const a = weld[tri[t]], b = weld[tri[t + 1]], c = weld[tri[t + 2]];
+    addEdge(a, b); addEdge(b, c); addEdge(c, a);
+  }
+  const sum = new Float32Array(m * nb), deg = new Float32Array(m);
+  for (let it = 0; it < iterations; it++) {
+    sum.fill(0); deg.fill(0);
+    for (let e = 0; e < ea.length; e++) {
+      const a = ea[e], b = eb[e];
+      deg[a]++; deg[b]++;
+      for (let k = 0; k < nb; k++) { sum[a * nb + k] += W[b * nb + k]; sum[b * nb + k] += W[a * nb + k]; }
+    }
+    for (let w = 0; w < m; w++) {
+      if (pin[w] || !deg[w]) continue;
+      for (let k = 0; k < nb; k++) W[w * nb + k] = 0.5 * W[w * nb + k] + (0.5 * sum[w * nb + k]) / deg[w];
+    }
+  }
+  for (let i = 0; i < n; i++) if (!pinned[i]) for (let b = 0; b < nb; b++) dense[i * nb + b] = W[weld[i] * nb + b];
+}
+
+/** pos 必須已經 normalizeRig 過；rig 是 analyzeRig 的結果；index 是三角形（有的話權重會沿表面抹平）。 */
+export function buildSkeleton(pos: Float32Array, rig: RigInfo, index: ArrayLike<number> | null = null): Skel {
   const n = pos.length / 3;
   const W = rig.weights;
   const X = (i: number) => pos[i * 3], Y = (i: number) => pos[i * 3 + 1], Z = (i: number) => pos[i * 3 + 2];
@@ -182,17 +238,20 @@ export function buildSkeleton(pos: Float32Array, rig: RigInfo): Skel {
   rest[TAIL].copy(T); rest[TAIL + 1].copy(t2); rest[TAIL + 2].copy(t3);
   const tailDroop = clamp(Math.atan2(T.y - tEnd.y, Math.max(0.02, T.x - tEnd.x)), 0, 1.4);
 
-  // ── 蒙皮：每個點最多跟四根骨頭
+  // ── 蒙皮：先算每個點對每根骨頭的權重，沿表面抹平，最後每個點留最重的四根
+  const NB = BONES.length;
+  const dense = new Float32Array(n * NB);
+  const pinned = new Uint8Array(n);
   const skinIndex = new Uint16Array(n * 4);
   const skinWeight = new Float32Array(n * 4);
-  const acc = new Float32Array(BONES.length);
   for (let i = 0; i < n; i++) {
-    acc.fill(0);
+    const acc = dense.subarray(i * NB, i * NB + NB);
     const x = X(i), y = Y(i);
     let lw = W[i * 4 + 1], tw = W[i * 4 + 2], hw = W[i * 4 + 3];
     const sum = lw + tw + hw;
     if (sum > 1) { lw /= sum; tw /= sum; hw /= sum; }
     const id = Math.round(W[i * 4]);
+    if (lw > 0.9 && y < ankleY * 0.7) pinned[i] = 1;
     if (lw > 0 && id > 0) {
       const b = LEG + (id - 1) * 3;
       const up = smooth(kneeY - 0.03, kneeY + 0.03, y);
@@ -213,6 +272,10 @@ export function buildSkeleton(pos: Float32Array, rig: RigInfo): Skel {
       const s = smooth(xs - 0.07, xs + 0.07, x), c = smooth(xc - 0.07, xc + 0.07, x);
       acc[PELVIS] += body * (1 - s); acc[SPINE] += body * (s - c); acc[CHEST] += body * c;
     }
+  }
+  smoothWeights(pos, index, dense, NB, pinned);
+  for (let i = 0; i < n; i++) {
+    const acc = dense.subarray(i * NB, i * NB + NB);
     let total = 0;
     for (let j = 0; j < 4; j++) {
       let best = 0;
@@ -249,13 +312,17 @@ export type Frame = {
   trot: number;     // 0 走路的腳步順序 ~ 1 小跑步
   lift: number;     // 跳起來的高度
   crouch: number;   // 蹲低
+  gallop: number;   // 0 ~ 1 奔跑（後腳一起推、前腳一起落地，身體一伸一縮）
+  flex: number;     // 背弓起（正）或伸直（負），弧度
+  rock: number;     // 前高後低（正）的高度差，跳躍和奔跑用
+  tuck: number;     // 0 ~ 1 腳收起來（跳到空中）
   look: number;     // 頭比原本多轉多少（正值＝往左轉）
   tilt: number;     // 歪頭
   nod: number;      // 低頭（負值＝抬頭）
   wag: number; wagAmp: number; tailUp: number;
   breath: number;
 };
-export const restFrame = (): Frame => ({ sit: 0, phase: 0, amp: 0, stride: 0, trot: 0, lift: 0, crouch: 0, look: 0, tilt: 0, nod: 0, wag: 0, wagAmp: 0, tailUp: 0, breath: 0 });
+export const restFrame = (): Frame => ({ sit: 0, phase: 0, amp: 0, stride: 0, trot: 0, gallop: 0, flex: 0, rock: 0, tuck: 0, lift: 0, crouch: 0, look: 0, tilt: 0, nod: 0, wag: 0, wagAmp: 0, tailUp: 0, breath: 0 });
 
 export type Solved = { pos: V[]; q: Q[] };
 export const newSolved = (): Solved => ({ pos: BONES.map(() => V3()), q: BONES.map(() => new THREE.Quaternion()) });
@@ -269,6 +336,15 @@ const TAU = Math.PI * 2;
 // 每條腿在步伐裡的起點：走路是後左→前左→後右→前右，小跑是對角線的兩隻腳一起
 const WALK_OFF = [0.25, 0.75, 0, 0.5];
 const TROT_OFF = [0.5, 1.0, 0, 0.5];
+// 奔跑：後面兩隻腳先後蹬地，半圈後前面兩隻腳先後落地
+const GALLOP_OFF = [0.58, 0.68, 0, 0.1];
+/** 這一格每條腿在步伐裡的起點（三種步法依比例混合）。 */
+export function legOffset(k: number, trot: number, gallop: number) {
+  const wt = WALK_OFF[k] + (TROT_OFF[k] - WALK_OFF[k]) * trot;
+  return wt + (GALLOP_OFF[k] - wt) * gallop;
+}
+/** 一圈裡腳踩在地上的比例：走路長、小跑短、奔跑最短。 */
+export const dutyOf = (trot: number, gallop: number) => (0.62 - 0.12 * trot) * (1 - gallop) + 0.36 * gallop;
 
 /** 由姿勢參數算出每根骨頭的位置和旋轉（相對站姿）。 */
 export function solvePose(s: Skel, f: Frame, out: Solved): Solved {
@@ -281,16 +357,17 @@ export function solvePose(s: Skel, f: Frame, out: Solved): Solved {
   const D = Math.hypot(vx, vy), a0 = Math.atan2(vy, vx);
   const bob = f.amp * (-0.006 + 0.008 * Math.sin(f.phase * 2 * TAU));
   const common = f.lift - f.crouch + bob;
-  const py = P0.y + (s.sitY - P0.y) * f.sit + common;
-  const sy = S0.y - 0.02 * f.sit + common - f.crouch * 0.3;
+  const py = P0.y + (s.sitY - P0.y) * f.sit + common - f.rock * 0.5;
+  const sy = S0.y - 0.02 * f.sit + common - f.crouch * 0.3 + f.rock * 0.5;
   const ang = Math.asin(clamp((sy - py) / D, -1, 1));
   const th = ang - a0;
   const px = S0.x - D * Math.cos(ang);
   const sway = 0.05 * f.amp * Math.sin(f.phase * TAU);
 
-  rotY(q[PELVIS], -sway).multiply(qa.setFromAxisAngle(AZ, th));
+  // 弓背：骨盆往下轉、胸往下轉（頭朝 +X，繞 Z 正轉是抬頭），中間的脊椎不動
+  rotY(q[PELVIS], -sway).multiply(qa.setFromAxisAngle(AZ, th + f.flex * 0.5));
   q[SPINE].setFromAxisAngle(AZ, th);
-  rotY(q[CHEST], sway).multiply(qa.setFromAxisAngle(AZ, th + 0.012 * Math.sin(f.breath)));
+  rotY(q[CHEST], sway).multiply(qa.setFromAxisAngle(AZ, th - f.flex * 0.5 + 0.012 * Math.sin(f.breath)));
   p[PELVIS].set(px, py, P0.z);
   p[SPINE].copy(va.copy(rest[SPINE]).sub(P0).applyQuaternion(q[PELVIS])).add(p[PELVIS]);
   p[CHEST].copy(va.copy(rest[CHEST]).sub(rest[SPINE]).applyQuaternion(q[SPINE])).add(p[SPINE]);
@@ -315,27 +392,34 @@ export function solvePose(s: Skel, f: Frame, out: Solved): Solved {
   p[TAIL + 2].copy(va.copy(rest[TAIL + 2]).sub(rest[TAIL + 1]).applyQuaternion(q[TAIL + 1])).add(p[TAIL + 1]);
 
   // 腿：先決定腳掌要踩在哪，再反推膝蓋
-  const beta = 0.62 - 0.12 * f.trot; // 一圈裡腳踩在地上的比例
+  const beta = dutyOf(f.trot, f.gallop); // 一圈裡腳踩在地上的比例
   const air = Math.max(0, f.lift - 0.02) * 0.85;
   for (let k = 0; k < 4; k++) {
     const L = legs[k];
     const b = L.bone;
     const parent = L.front ? CHEST : PELVIS;
     const hip = p[b].copy(va.copy(L.hip).sub(rest[parent]).applyQuaternion(q[parent])).add(p[parent]);
-    const ph = frac(f.phase + WALK_OFF[k] + (TROT_OFF[k] - WALK_OFF[k]) * f.trot);
+    const ph = frac(f.phase + legOffset(k, f.trot, f.gallop));
     let dx: number, dy = 0, swing = 0;
     if (ph < beta) dx = 0.5 - ph / beta; // 踩在地上：隨身體前進而往後
     else {
       const u = (ph - beta) / (1 - beta);
       dx = -0.5 + (0.5 - 0.5 * Math.cos(Math.PI * u)); // 抬起來往前跨
       swing = Math.sin(Math.PI * u);
-      dy = (0.035 + 0.12 * f.stride + 0.02 * f.trot) * swing;
+      dy = (0.035 + 0.12 * f.stride + 0.02 * f.trot + 0.05 * f.gallop) * swing * (L.front ? 1 : 1 - 0.45 * f.gallop);
     }
+    // 奔跑時前腳往前伸得多、後腳落在肚子下方就好，腳才不會擠在一起
+    dx += (L.front ? 0.18 : -0.2) * f.gallop;
     const paw = vc.copy(L.paw);
     paw.x += dx * f.stride * f.amp;
     paw.y += dy * f.amp + air;
+    // 跳到空中：前腳往上收到胸前、後腳往後上方收
+    if (f.tuck > 0) {
+      paw.y += f.tuck * (L.front ? 0.2 : 0.13);
+      paw.x += f.tuck * (L.front ? -0.03 : 0.05);
+    }
     // 腳掌的角度：跨步時腳尖往後垂；後腳坐下時整個腳掌平貼地板、往前伸
-    let pitch = -0.55 * swing * f.amp - 0.35 * Math.min(1, air / 0.08);
+    let pitch = -0.55 * swing * f.amp - 0.35 * Math.min(1, air / 0.08) - 0.7 * f.tuck;
     if (!L.front) {
       pitch += 1.15 * f.sit;
       paw.x += (px + 0.17 - L.paw.x) * f.sit;

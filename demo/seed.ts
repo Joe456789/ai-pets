@@ -65,8 +65,8 @@ export async function seedDemo() {
 
   const afuPhoto = await savePhoto(uid, readFileSync(join(/*turbopackIgnore: true*/ process.cwd(), "demo", "assets", "afu.jpg")));
   const pets: PetDoc[] = [
-    { id: "demo-mochi", name: "麻糬", kind: "貓", sex: "母", birth: "2019-04", neutered: true, chipped: true, status: "在世", createdAt: iso(-400) },
-    { id: "demo-afu", name: "阿福", kind: "狗", size: "大型", sex: "公", birth: "2012-06", photo: afuPhoto, status: "已離開", passedAt: iso(-60), createdAt: iso(-399) },
+    { id: "demo-mochi", name: "麻糬", kind: "貓", sex: "母", birth: "2019-04", neutered: true, chipped: true, traits: ["好奇", "貪吃", "愛撒嬌"], likes: "曬太陽、逗貓棒", habits: "早上會跳上床叫你起床", status: "在世", createdAt: iso(-400) },
+    { id: "demo-afu", name: "阿福", kind: "狗", size: "大型", sex: "公", birth: "2012-06", photo: afuPhoto, traits: ["黏人", "活潑好動"], likes: "河堤散步、撿球", habits: "走到一半會停下來回頭等你", status: "已離開", passedAt: iso(-60), createdAt: iso(-399) },
   ];
   for (const p of pets) await db.set(`owners/${uid}/pets/${p.id}`, p);
 

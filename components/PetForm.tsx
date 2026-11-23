@@ -3,12 +3,14 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { savePetAction } from "@/app/actions";
 import { shrinkImage } from "@/lib/clientImage";
+import { MAX_TRAITS, TRAITS } from "@/lib/personality";
 import type { PetDoc } from "@/lib/types";
 
 export function PetForm({ pet }: { pet?: PetDoc }) {
   const router = useRouter();
   const [kind, setKind] = useState(pet?.kind ?? "狗");
   const [status, setStatus] = useState(pet?.status ?? "在世");
+  const [traits, setTraits] = useState<string[]>(pet?.traits ?? []);
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
 
@@ -45,6 +47,23 @@ export function PetForm({ pet }: { pet?: PetDoc }) {
           <label className="check"><input type="checkbox" name="chipped" defaultChecked={pet?.chipped} />已植入晶片並登記</label>
         </div>
       )}
+      <fieldset className="field">
+        <legend>個性（最多 {MAX_TRAITS} 個）</legend>
+        <div className="chips">
+          {TRAITS.map((t) => {
+            const on = traits.includes(t);
+            return (
+              <label key={t} className={`chip ${on ? "on" : ""}`}>
+                <input type="checkbox" name="traits" value={t} checked={on} disabled={!on && traits.length >= MAX_TRAITS}
+                  onChange={() => setTraits(on ? traits.filter((x) => x !== t) : [...traits, t])} />{t}
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+      <label className="field">喜歡的事（選填）<input name="likes" defaultValue={pet?.likes} maxLength={60} placeholder="例如：追球、曬太陽、吃地瓜" /></label>
+      <label className="field">小習慣（選填）<input name="habits" defaultValue={pet?.habits} maxLength={80} placeholder="例如：你回家時會在門口轉圈" /></label>
+      <p className="tiny" style={{ marginTop: -6 }}>個性會讓 3D 的牠動起來更像牠：活潑的會到處跑跳，愛睡覺的常常坐著陪你。</p>
       <label className="field">照片<input type="file" name="photo" accept="image/*" /></label>
       {pet && (
         <label className="field">狀態

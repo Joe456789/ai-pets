@@ -57,6 +57,7 @@ export default async function MePage() {
               <div className="grow">
                 <div className="row" style={{ gap: 8 }}><b>{p.name}</b><Badge>{p.status}</Badge></div>
                 <span className="small muted">{[p.kind, p.size, p.sex, age !== null ? `${age} 歲` : ""].filter(Boolean).join("・")}</span>
+                {p.traits?.length ? <span className="tiny" style={{ display: "block" }}>{p.traits.join("・")}</span> : null}
                 {next && <span className="next-visit">下次回診 {next.slice(5).replace("-", "/")}</span>}
                 <div className="row" style={{ gap: 6, marginTop: 6 }}>
                   <Link className={`btn small ${p.status === "在世" ? "primary" : ""}`} href={`/pets/${p.id}/records`}>醫療紀錄{count ? `（${count}）` : ""}</Link>

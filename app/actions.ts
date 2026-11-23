@@ -10,6 +10,7 @@ import { deleteFileByUrl, readFileByUrl, savePhoto } from "@/lib/media";
 import { addMonths, CARE_KINDS } from "@/lib/care";
 import { lessonById, quizOf } from "@/lib/lessons";
 import { CHANGE_KINDS, changeReminder, DETAILS, HELPERS, planChange, WHEN, WORRIES } from "@/lib/lifeChange";
+import { cleanTraits } from "@/lib/personality";
 import { assessReadiness, costProfileOf } from "@/lib/readiness";
 import { cleanDraft } from "@/lib/records";
 import * as repo from "@/lib/repo";
@@ -141,8 +142,11 @@ export async function savePetAction(form: FormData): Promise<Result<string>> {
     const cur = id ? await repo.getPet(uid, id) : null;
     if (id && !cur) return { ok: false, error: "找不到這隻毛孩" };
     const photo = (await photoFrom(uid, form.get("photo"))) ?? cur?.photo;
+    const traits = cleanTraits(form.getAll("traits"));
+    const likes = String(form.get("likes") ?? "").trim().slice(0, 60);
+    const habits = String(form.get("habits") ?? "").trim().slice(0, 80);
     const pet = await repo.savePet(uid, {
-      id, name, kind, size: kind === "狗" ? size : undefined, sex, birth, photo,
+      id, name, kind, size: kind === "狗" ? size : undefined, sex, birth, photo, traits, likes, habits,
       // 已離開時表單不顯示這兩格，沿用原本的值
       neutered: passed ? cur?.neutered : form.get("neutered") === "on",
       chipped: passed ? cur?.chipped : form.get("chipped") === "on",
@@ -153,6 +157,21 @@ export async function savePetAction(form: FormData): Promise<Result<string>> {
     else if (cur && cur.name !== name) for (const c of await repo.listCare(uid)) if (c.petId === pet.id) await repo.saveCareName(c.id, name);
     revalidatePath("/me");
     return { ok: true, data: pet.id };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** 刪除毛孩：連同醫療紀錄、照顧提醒、生活變動清單、3D 紀念和所有照片，無法復原。 */
+export async function deletePetAction(id: string): Promise<Result> {
+  try {
+    const uid = await requireWriter();
+    if (!(await repo.getPet(uid, id))) return { ok: false, error: "找不到這隻毛孩" };
+    const files = await repo.deletePet(uid, id);
+    for (const f of files) await deleteFileByUrl(f).catch(() => undefined);
+    revalidatePath("/me");
+    revalidatePath("/memorial");
+    return { ok: true, data: undefined };
   } catch (e) {
     return fail(e);
   }
@@ -337,7 +356,7 @@ export async function tributeDraftAction(id: string): Promise<Result<string>> {
     if (!m.memories.trim()) return { ok: false, error: "先寫幾段回憶，AI 才能幫你寫" };
     const pet = await repo.getPet(m.uid, m.petId);
     const years = pet?.birth ? `${pet.birth.slice(0, 4)}～${(pet.passedAt ?? nowIso()).slice(0, 4)}` : "";
-    return { ok: true, data: await writeTribute(m.uid, { name: m.petName, kind: m.kind, years, memories: m.memories }) };
+    return { ok: true, data: await writeTribute(m.uid, { name: m.petName, kind: m.kind, years, memories: m.memories, traits: pet?.traits ?? [], likes: pet?.likes ?? "", habits: pet?.habits ?? "" }) };
   } catch (e) {
     return fail(e);
   }

@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
 import { DemoBanner, SignInCard } from "@/components/Gate";
+import { DeletePet } from "@/components/DeletePet";
 import { PetForm } from "@/components/PetForm";
 import { PageHead } from "@/components/ui";
 import { currentUid } from "@/lib/auth";
-import { getPet } from "@/lib/repo";
+import { getPet, isDemo } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export default async function EditPet({ params }: { params: Promise<{ id: string
       <DemoBanner uid={uid} />
       <PageHead title={`編輯${pet.name}`} />
       <PetForm pet={pet} />
+      {!isDemo(uid) && <div style={{ marginTop: 18 }}><DeletePet id={pet.id} name={pet.name} passed={pet.status === "已離開"} /></div>}
     </>
   );
 }

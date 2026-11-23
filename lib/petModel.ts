@@ -32,7 +32,7 @@ export async function loadPetModel(url: string): Promise<PetModel> {
   geo.computeBoundingBox();
   geo.computeBoundingSphere();
   const rig = analyzeRig(arr, flipped);
-  const skel = buildSkeleton(arr, rig);
+  const skel = buildSkeleton(arr, rig, geo.index ? (geo.index.array as ArrayLike<number>) : null);
   geo.setAttribute("skinIndex", new THREE.BufferAttribute(skel.skinIndex, 4));
   geo.setAttribute("skinWeight", new THREE.BufferAttribute(skel.skinWeight, 4));
 

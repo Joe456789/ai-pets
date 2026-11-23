@@ -89,11 +89,11 @@ export async function extractRecord(scope: string, photo: AiPart) {
 const tributeSchema = z.object({ text: z.string() });
 
 /** 依飼主寫的回憶寫一段紀念文。只用飼主提供的回憶，不加宗教或「去了哪裡」的說法。 */
-export async function writeTribute(scope: string, input: { name: string; kind: string; years: string; memories: string }) {
+export async function writeTribute(scope: string, input: { name: string; kind: string; years: string; memories: string; traits?: string[]; likes?: string; habits?: string }) {
   const system = `${COMMON_RULES}
 工作：飼主的${input.kind}「${input.name}」離開了。依飼主寫的回憶，替牠寫一段 120 到 200 字的紀念文，放在牠的 3D 紀念頁。
 - 用第三人稱寫牠，像是陪伴過牠的人在說故事；具體寫出回憶裡的小事，不要空泛的套話。
-- 只能用飼主寫的回憶，不要捏造牠的經歷或個性。
+- 只能用飼主寫的回憶、個性（traits）、喜歡的事（likes）和小習慣（habits），不要捏造牠的經歷或個性；沒填的就不提。
 - 不提死因與病情，不用宗教用語，不寫「去了彩虹橋」「在天上看著你」這類說法。
 - 結尾溫和地肯定飼主陪牠走完一生，不要說教。`;
   const { text } = await generateJson({ scope, system, parts: [{ text: JSON.stringify(input) }], schema: tributeSchema, temperature: 0.7 });
