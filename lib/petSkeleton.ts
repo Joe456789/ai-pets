@@ -220,6 +220,18 @@ export function buildSkeleton(pos: Float32Array, rig: RigInfo, index: ArrayLike<
   for (const t of tip) mouth.add(V3(X(t.i), Y(t.i), Z(t.i)));
   if (tip.length) mouth.multiplyScalar(1 / tip.length); else mouth.copy(skull).addScaledVector(face, 0.12);
   const headYaw = Math.atan2(-face.z, face.x);
+  // 頭這顆球：照片裡頭常常低低地往前伸，嘴巴、下巴、舌頭跟脖子根部差不多高，
+  // 光看「離脖子根部多遠」會被算成脖子，轉頭時整張嘴留在原地被拉爛。
+  // 所以另外以頭的中心（耳朵、眼睛、嘴巴的中間）畫一顆球，球裡的點整塊跟著頭轉。
+  const core = centroid((i) => W[i * 4 + 3] > 0.5 && Y(i) > N.y + 0.02)?.lerp(mouth, 0.35) ?? skull.clone();
+  const coreD = new Float32Array(n);
+  const cd: number[] = [];
+  for (let i = 0; i < n; i++) {
+    coreD[i] = Math.hypot(X(i) - core.x, Y(i) - core.y, Z(i) - core.z);
+    if (W[i * 4 + 3] > 0.5 && Y(i) > N.y + 0.02) cd.push(coreD[i]);
+  }
+  cd.sort((a, b) => a - b);
+  const coreR = cd.length ? cd[Math.floor(cd.length * 0.9)] : headR * 0.6;
 
   // ── 尾巴：沿著尾巴分三節
   const T = V3(rig.tail[0], rig.tail[1], 0);
@@ -248,6 +260,9 @@ export function buildSkeleton(pos: Float32Array, rig: RigInfo, index: ArrayLike<
     const acc = dense.subarray(i * NB, i * NB + NB);
     const x = X(i), y = Y(i);
     let lw = W[i * 4 + 1], tw = W[i * 4 + 2], hw = W[i * 4 + 3];
+    // 頭這顆球裡、在脖子根部前面的點（嘴巴、下巴、垂下來的舌頭）整塊算頭
+    const ball = x > N.x + 0.02 ? 1 - smooth(0.8, 1.05, coreD[i] / coreR) : 0;
+    if (ball > hw) { const k = lw + tw > 0 ? Math.min(1, (1 - ball) / (lw + tw)) : 1; lw *= k; tw *= k; hw = ball; }
     const sum = lw + tw + hw;
     if (sum > 1) { lw /= sum; tw /= sum; hw /= sum; }
     const id = Math.round(W[i * 4]);
@@ -264,7 +279,7 @@ export function buildSkeleton(pos: Float32Array, rig: RigInfo, index: ArrayLike<
       acc[TAIL] += tw * (1 - a); acc[TAIL + 1] += tw * (a - b); acc[TAIL + 2] += tw * b;
     }
     if (hw > 0) {
-      const h = smooth(0.32, 0.52, headD[i] / headR);
+      const h = Math.max(smooth(0.32, 0.52, headD[i] / headR), ball);
       acc[NECK] += hw * (1 - h); acc[HEAD] += hw * h;
     }
     const body = Math.max(0, 1 - lw - tw - hw);
