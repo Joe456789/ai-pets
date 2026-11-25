@@ -15,6 +15,17 @@ export type PetModel = {
   dispose: () => void;
 };
 
+/**
+ * 每個點的 x,y,z 依序排好。不能直接拿 attribute.array：
+ * 減面工具（gltf-transform）會把位置、UV 交錯存在同一塊，array 會是整包混在一起的資料。
+ */
+function positionsOf(geo: THREE.BufferGeometry) {
+  const pos = geo.getAttribute("position");
+  const arr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) { arr[i * 3] = pos.getX(i); arr[i * 3 + 1] = pos.getY(i); arr[i * 3 + 2] = pos.getZ(i); }
+  return arr;
+}
+
 /** 讀進 GLB、放正、自動建立骨架和蒙皮，回傳可以擺姿勢的模型（身高 1、頭朝 +X、腳底 y=0）。 */
 export async function loadPetModel(url: string): Promise<PetModel> {
   const gltf = await new GLTFLoader().loadAsync(url);
@@ -24,8 +35,7 @@ export async function loadPetModel(url: string): Promise<PetModel> {
   const found = src as THREE.Mesh;
   found.updateWorldMatrix(true, false);
   const geo = (found.geometry as THREE.BufferGeometry).clone().applyMatrix4(found.matrixWorld);
-  const pos = geo.getAttribute("position") as THREE.BufferAttribute;
-  const arr = new Float32Array(pos.array as ArrayLike<number>);
+  const arr = positionsOf(geo);
   const { flipped } = normalizeRig(arr);
   geo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
   geo.deleteAttribute("normal");
@@ -87,7 +97,7 @@ export async function realSizeGlb(url: string, heightM: number): Promise<ArrayBu
   const found = src as THREE.Mesh;
   found.updateWorldMatrix(true, false);
   const geo = (found.geometry as THREE.BufferGeometry).clone().applyMatrix4(found.matrixWorld);
-  const arr = new Float32Array((geo.getAttribute("position") as THREE.BufferAttribute).array as ArrayLike<number>);
+  const arr = positionsOf(geo);
   normalizeRig(arr);
   for (let i = 0; i < arr.length; i++) arr[i] *= heightM;
   geo.setAttribute("position", new THREE.BufferAttribute(arr, 3));

@@ -29,7 +29,7 @@ export function Pet3dLab() {
     let raf = 0;
     let disposed = false;
     let dispose = () => undefined as void;
-    loadPetModel(`/models/${new URLSearchParams(location.search).get("f") ?? "afu-v2"}.glb`).then((m) => {
+    loadPetModel(`/models/${new URLSearchParams(location.search).get("f") ?? "afu-v3"}.glb`).then((m) => {
       if (disposed) return m.dispose();
       dispose = m.dispose;
       group.add(m.mesh);
@@ -49,6 +49,8 @@ export function Pet3dLab() {
         play: () => { frozen = false; last = performance.now(); },
         jumpAt: (t: number, yaw = 0) => { frozen = true; const j = jumpCurve(t); m.update({ ...restFrame(), lift: j.lift, crouch: j.crouch, rock: j.rock, tuck: j.tuck }); draw(yaw); },
         view: (z: number, y: number, lookY: number) => { cam.position.set(0, y, z); cam.lookAt(0, lookY, 0); },
+        // 任意位置看任意一點，例如近看臉：__lab.look([0.9, 0.85, 0.9], [0.5, 0.75, 0], 20)
+        look: (from: number[], at: number[], fov = 35) => { cam.position.fromArray(from); cam.lookAt(new THREE.Vector3().fromArray(at)); cam.fov = fov; cam.updateProjectionMatrix(); },
         bones: (on: boolean) => { helper.visible = on; },
         // 用顏色顯示每個點主要跟著哪根骨頭
         colors: (on: boolean, yaw = 0) => {

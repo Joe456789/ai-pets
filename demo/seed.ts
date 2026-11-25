@@ -130,7 +130,7 @@ export async function seedDemo() {
 
   const memorial: MemorialDoc = {
     id: "demo-memorial-afu", uid, petId: "demo-afu", petName: "阿福", kind: "狗", heightCm: 65,
-    photos: [afuPhoto], glb: "/models/afu-v2.glb", status: "完成",
+    photos: [afuPhoto], glb: "/models/afu-v3.glb", status: "完成",
     memories: "每天傍晚一定要去河堤散步，走到一半會停下來回頭確認我有沒有跟上。最喜歡趴在陽台曬太陽，聽到塑膠袋的聲音就會衝過來。",
     tribute: "阿福是個很有原則的大個子。每天傍晚，河堤散步是牠一定要守住的約定，走到一半還會停下來回頭，確認你有沒有跟上。午後的陽台是牠的地盤，一趴就是一個下午；但只要廚房傳來塑膠袋的聲音，牠總是第一個衝過來。十四年的日子裡，你陪牠走過每一段河堤，也陪牠走完了最後一段路。謝謝你，讓牠這一生都有人等、有人陪。",
     tributeOk: true, createdAt: iso(-55), updatedAt: iso(-55),

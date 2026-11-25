@@ -63,3 +63,30 @@ export async function requireWriter() {
 }
 
 export const startDemoSession = () => startSession(DEMO_UID);
+
+/*
+ * 「用手機瀏覽器開」：LINE 裡的瀏覽器不能偵測地板，要跳到 Chrome／Safari 開 AR，
+ * 但那邊沒有登入的 cookie，所以發一張只能看這一個紀念、2 小時內有效的票。
+ */
+const TICKET_TTL = 2 * 60 * 60;
+const ticketSig = (body: string) => createHmac("sha256", secret()).update(`ar-ticket:${body}`).digest();
+
+export function signArTicket(memorialId: string, now = Date.now()) {
+  const body = Buffer.from(JSON.stringify({ m: memorialId, exp: Math.floor(now / 1000) + TICKET_TTL })).toString("base64url");
+  return `${body}.${ticketSig(body).toString("base64url")}`;
+}
+
+export function readArTicket(token: string | undefined, memorialId: string, now = Date.now()) {
+  if (!token) return false;
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return false;
+  const given = Buffer.from(sig, "base64url");
+  const expected = ticketSig(body);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return false;
+  try {
+    const p = JSON.parse(Buffer.from(body, "base64url").toString()) as { m?: unknown; exp?: unknown };
+    return p.m === memorialId && typeof p.exp === "number" && p.exp > now / 1000;
+  } catch {
+    return false;
+  }
+}

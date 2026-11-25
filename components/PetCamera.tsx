@@ -1,12 +1,16 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import * as THREE from "three";
 import { clampDistance, deviceQuaternion, floorHit, focalPx, fovDeg, stepBall, stepToward, type Ball } from "@/lib/arMath";
 import { jumpTravel, newAnim, stepAnim, triggerAct, type PetAct } from "@/lib/petAnim";
 import { loadPetModel, type PetModel } from "@/lib/petModel";
 import { temperOf } from "@/lib/personality";
 import type { Trait } from "@/lib/types";
+import { RealSizeAr } from "@/components/RealSizeAr";
+
+/** 牠出現前，地板要比手機低這麼多（公尺）才算地板，避免放到桌上。 */
+const MIN_FLOOR_DROP = 0.45;
 
 /** 沒有方向感測器時，鏡頭固定往下看的角度（弧度）。 */
 const FIXED_PITCH = 0.32;
@@ -30,12 +34,23 @@ function blobTexture() {
   return new THREE.CanvasTexture(c);
 }
 
+/** LINE 內建瀏覽器（iPhone、Android 都會在 UA 帶 Line/版本）。 */
+const inLine = () => typeof navigator !== "undefined" && / Line\//i.test(navigator.userAgent);
+
 /**
- * 在 LINE 裡打開鏡頭，讓 3D 的牠出現在你身邊：站在地板上、會走會跑會跳，點地板叫牠過去、丟球給牠撿。
- * 用手機的方向感測器轉動虛擬鏡頭，所以手機轉開再轉回來，牠還在原地。沒有感測器時鏡頭固定，牠留在畫面裡。
- * 網頁讀不到你在房間裡走動，只讀得到手機轉動；距離是用手機高度推算的，會有誤差。
+ * 打開鏡頭，讓 3D 的牠出現在你身邊：站在地板上、會走會跑會跳，點地板叫牠過去、丟球給牠撿。
+ * 兩種模式：
+ * - 「真的地板」（WebXR，Android Chrome）：手機會偵測真實地板，牠的大小和距離都是真的，你走動牠也留在原地。
+ * - 「一般鏡頭」（LINE 裡、iPhone）：只讀得到手機轉動，地板位置是用手機高度推算的，會有誤差。
+ * LINE 裡沒辦法偵測地板，所以提供「用手機瀏覽器開」；iPhone 的 Safari 沒有 WebXR，改用蘋果內建的 AR 檢視（靜態）。
  */
-export function PetCamera({ url, name, heightCm, traits, backHref }: { url: string; name: string; heightCm: number; traits: Trait[]; backHref: string }) {
+export function PetCamera({ url, name, heightCm, traits, backHref, externalHref }: { url: string; name: string; heightCm: number; traits: Trait[]; backHref: string; externalHref: string }) {
+  const root = useRef<HTMLDivElement>(null);
+  const xrSession = useRef<XRSession | null>(null);
+  const [mode, setMode] = useState<"cam" | "xr">("cam");
+  const [xrOk, setXrOk] = useState(false);
+  const [lineApp, setLineApp] = useState(false);
+  const [floorFound, setFloorFound] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const fx = useRef<HTMLDivElement>(null);
@@ -51,7 +66,39 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
   const phoneRef = useRef(phoneM);
   phoneRef.current = phoneM;
 
-  useEffect(() => () => stream.current?.getTracks().forEach((t) => t.stop()), []);
+  useEffect(() => () => { stream.current?.getTracks().forEach((t) => t.stop()); void xrSession.current?.end().catch(() => undefined); }, []);
+  useEffect(() => {
+    setLineApp(inLine());
+    navigator.xr?.isSessionSupported("immersive-ar").then(setXrOk).catch(() => setXrOk(false));
+  }, []);
+
+  /** 真的地板：要在按下按鈕的當下要求 AR 工作階段。 */
+  const startXr = async () => {
+    setPhase("starting");
+    stream.current?.getTracks().forEach((t) => t.stop());
+    try {
+      const s = await navigator.xr!.requestSession("immersive-ar", {
+        requiredFeatures: ["hit-test"],
+        optionalFeatures: ["dom-overlay"],
+        domOverlay: { root: root.current! },
+      });
+      xrSession.current = s;
+      s.addEventListener("end", () => {
+        xrSession.current = null;
+        setMode("cam");
+        setFloorFound(false);
+        setPhase("intro");
+      });
+      setCameraOk(true);
+      setGyro(true);
+      setFloorFound(false);
+      setMode("xr");
+      setPhase("on");
+    } catch {
+      setXrOk(false);
+      setPhase("intro");
+    }
+  };
 
   const start = async () => {
     setPhase("starting");
@@ -74,6 +121,8 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
 
   useEffect(() => {
     if (phase !== "on" || gyro === null) return;
+    const xr = mode === "xr" ? xrSession.current : null;
+    if (mode === "xr" && !xr) return;
     const el = canvas.current!;
     const box = el.parentElement!;
     const renderer = new THREE.WebGLRenderer({ canvas: el, alpha: true, antialias: true });
@@ -81,17 +130,38 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
     renderer.setClearColor(0x000000, 0);
     const scene = new THREE.Scene();
     scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a66, 2.4));
+    /** 所有邏輯都用這台鏡頭算，地板固定在 y=0；真的地板模式下，它是手機的真實位置減掉地板高度。 */
     const cam = new THREE.PerspectiveCamera(60, 1, 0.05, 50);
+    /** 交給 three.js 畫面用的鏡頭（WebXR 會自己改它的位置）。 */
+    const rcam = xr ? new THREE.PerspectiveCamera(60, 1, 0.05, 50) : cam;
     const blob = blobTexture();
     const temper = temperOf(traits);
     const H = heightCm / 100;
 
+    /** 地板以上的東西都放這裡；真的地板模式下整組往下移到偵測到的地板高度。 */
+    const world = new THREE.Group();
+    scene.add(world);
     const group = new THREE.Group();
     const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: blob, transparent: true, depthWrite: false }));
     shadow.position.y = 0.002;
     group.add(shadow);
     group.visible = false;
-    scene.add(group);
+    world.add(group);
+
+    // 真的地板：偵測地板用的瞄準圈
+    let floorY: number | null = null;
+    let hitSource: XRHitTestSource | null = null;
+    const reticle = new THREE.Mesh(new THREE.RingGeometry(0.09, 0.12, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    reticle.visible = false;
+    scene.add(reticle);
+    if (xr) {
+      renderer.xr.enabled = true;
+      renderer.xr.setReferenceSpaceType("local");
+      void renderer.xr.setSession(xr).then(() => xr.requestReferenceSpace("viewer"))
+        .then((viewer) => xr.requestHitTestSource?.({ space: viewer }))
+        .then((src) => { hitSource = src ?? null; })
+        .catch(() => undefined);
+    }
 
     let disposed = false;
     let model: PetModel | null = null;
@@ -105,7 +175,7 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
     }).catch(() => { if (!disposed) setLoaded("error"); });
 
     // 方向感測器
-    const fixed = !gyro;
+    const fixed = !gyro && !xr;
     const target = new THREE.Quaternion();
     let gotOrient = fixed;
     if (fixed) target.setFromEuler(new THREE.Euler(-FIXED_PITCH, 0, 0, "YXZ"));
@@ -116,12 +186,13 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       if (!gotOrient) cam.quaternion.copy(target);
       gotOrient = true;
     };
-    if (!fixed) window.addEventListener("deviceorientation", onOrient);
+    const useOrient = !fixed && !xr;
+    if (useOrient) window.addEventListener("deviceorientation", onOrient);
     cam.quaternion.copy(target);
     // 有權限但一直沒有資料（電腦、部分手機）：改成鏡頭固定
     let fixedNow = fixed;
     const noSensor = setTimeout(() => {
-      if (gotOrient) return;
+      if (gotOrient || xr) return;
       fixedNow = true;
       target.setFromEuler(new THREE.Euler(-FIXED_PITCH, 0, 0, "YXZ"));
       cam.quaternion.copy(target);
@@ -200,7 +271,7 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
 
     const removeThrown = () => {
       if (!thrown) return;
-      scene.remove(thrown.mesh, thrown.shadow);
+      world.remove(thrown.mesh, thrown.shadow);
       thrown.mesh.geometry.dispose();
       thrown = null;
     };
@@ -215,7 +286,7 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       const dir = camFlat().applyAxisAngle(new THREE.Vector3(0, 1, 0), -side);
       thrown = { mesh, shadow: sh, p: startP, v: dir.multiplyScalar(speedH).setY(speedV), r, t: 0, rest: 0, chased: false, held: false };
       mesh.position.copy(startP);
-      scene.add(mesh, sh);
+      world.add(mesh, sh);
       walkTo = null;
       route = [];
     };
@@ -276,7 +347,8 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       const n = ndc(cx, cy);
       const r = new THREE.Raycaster();
       r.setFromCamera(new THREE.Vector2(n.x, n.y), cam);
-      return r.ray.intersectsBox(new THREE.Box3().setFromObject(model.mesh).expandByScalar(H * 0.1));
+      const b = new THREE.Box3().setFromObject(model.mesh).translate(new THREE.Vector3(0, -world.position.y, 0));
+      return r.ray.intersectsBox(b.expandByScalar(H * 0.1));
     };
     const down = (e: PointerEvent) => { if (!press) press = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), onPet: hitPet(e.clientX, e.clientY) }; };
     const up = (e: PointerEvent) => {
@@ -297,33 +369,68 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       const f = floorHit(r.origin, r.direction);
       if (f) { route = []; go(f, null); }
     };
-    el.addEventListener("pointerdown", down);
-    el.addEventListener("pointerup", up);
+    // 掛在外層：真的地板模式下畫面畫在 AR 圖層，canvas 本身不顯示
+    box.addEventListener("pointerdown", down);
+    box.addEventListener("pointerup", up);
     const cancel = () => { press = null; };
-    el.addEventListener("pointercancel", cancel);
+    box.addEventListener("pointercancel", cancel);
 
     const resize = () => {
       const r = box.getBoundingClientRect();
       w = r.width; h = r.height;
-      renderer.setSize(w, h, false);
+      if (!renderer.xr.isPresenting) renderer.setSize(w, h, false);
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(box);
 
-    let raf = 0, last = performance.now(), lastFov = 0;
-    const tick = (now: number) => {
+    let last = performance.now(), lastFov = 0;
+    /** 真的地板：讀手機的真實位置和鏡頭投影，找地板。回傳 false 表示這一格還沒有資料。 */
+    const xrFrame = (frame: XRFrame) => {
+      const ref = renderer.xr.getReferenceSpace();
+      const pose = ref && frame.getViewerPose(ref);
+      if (!ref || !pose) return false;
+      const { position: p, orientation: o } = pose.transform;
+      if (floorY === null && hitSource) {
+        const hit = frame.getHitTestResults(hitSource)[0]?.getPose(ref);
+        reticle.visible = Boolean(hit);
+        if (hit) {
+          const hp = hit.transform.position;
+          reticle.position.set(hp.x, hp.y, hp.z);
+          if (p.y - hp.y > MIN_FLOOR_DROP) {
+            floorY = hp.y;
+            world.position.y = floorY;
+            reticle.visible = false;
+            gotOrient = true;
+            setFloorFound(true);
+          }
+        }
+      }
+      cam.position.set(p.x, p.y - (floorY ?? p.y - 1.25), p.z);
+      cam.quaternion.set(o.x, o.y, o.z, o.w);
+      cam.updateMatrixWorld();
+      const view = pose.views[0];
+      if (view) {
+        cam.projectionMatrix.fromArray(view.projectionMatrix);
+        cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+      }
+      return true;
+    };
+    const tick = (now: number, frame?: XRFrame) => {
       if (disposed) return;
-      raf = requestAnimationFrame(tick);
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       if (!w || !h) return;
-      cam.position.set(0, phoneRef.current, 0);
-      cam.quaternion.slerp(target, 0.35);
-      const v = video.current;
-      const fov = fovDeg(h, focalPx(w, h, v?.videoWidth ?? 0, v?.videoHeight ?? 0));
-      if (Math.abs(fov - lastFov) > 0.01 || cam.aspect !== w / h) { cam.fov = fov; cam.aspect = w / h; cam.updateProjectionMatrix(); lastFov = fov; }
-      cam.updateMatrixWorld();
+      if (xr) {
+        if (!frame || !xrFrame(frame)) return;
+      } else {
+        cam.position.set(0, phoneRef.current, 0);
+        cam.quaternion.slerp(target, 0.35);
+        const v = video.current;
+        const fov = fovDeg(h, focalPx(w, h, v?.videoWidth ?? 0, v?.videoHeight ?? 0));
+        if (Math.abs(fov - lastFov) > 0.01 || cam.aspect !== w / h) { cam.fov = fov; cam.aspect = w / h; cam.updateProjectionMatrix(); lastFov = fov; }
+        cam.updateMatrixWorld();
+      }
 
       if (!placed && gotOrient && model) {
         const r = ray(0, -0.45);
@@ -332,7 +439,7 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
         placed = true;
         nextIdle = now + 5000;
       }
-      if (!placed || !model) { renderer.render(scene, cam); return; }
+      if (!placed || !model) { renderer.render(scene, rcam); return; }
 
       // 球
       if (thrown && !thrown.held) {
@@ -369,7 +476,7 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       if (!walkTo && !route.length && !thrown && !press && now > nextIdle) idle(now);
 
       if (thrown) {
-        if (thrown.held) model.mouth(thrown.p);
+        if (thrown.held) { model.mouth(thrown.p); thrown.p.y -= world.position.y; }
         thrown.mesh.position.copy(thrown.p);
         thrown.mesh.rotation.x += Math.hypot(thrown.v.x, thrown.v.z) * dt * 20;
         thrown.shadow.position.set(thrown.p.x, 0.003, thrown.p.z);
@@ -397,7 +504,7 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       model.mesh.rotation.y = yaw;
       shadow.rotation.y = yaw;
       shadow.scale.set(bodyW() * 0.85, 1, H * 0.45);
-      renderer.render(scene, cam);
+      renderer.render(scene, rcam);
 
       // 看不到牠時，畫面邊緣出現箭頭指出牠在哪
       const center = pet.clone().setY(H / 2);
@@ -415,27 +522,37 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
         }
       }
     };
-    raf = requestAnimationFrame(tick);
+    renderer.setAnimationLoop(tick);
 
     return () => {
       disposed = true;
-      cancelAnimationFrame(raf);
+      renderer.setAnimationLoop(null);
       clearTimeout(noSensor);
-      if (!fixed) window.removeEventListener("deviceorientation", onOrient);
-      el.removeEventListener("pointerdown", down);
-      el.removeEventListener("pointerup", up);
-      el.removeEventListener("pointercancel", cancel);
+      if (useOrient) window.removeEventListener("deviceorientation", onOrient);
+      box.removeEventListener("pointerdown", down);
+      box.removeEventListener("pointerup", up);
+      box.removeEventListener("pointercancel", cancel);
+      hitSource?.cancel();
+      reticle.geometry.dispose();
       ro.disconnect();
       removeThrown();
       model?.dispose();
       blob.dispose();
       renderer.dispose();
     };
-  }, [phase, gyro, url, heightCm, traits]);
+  }, [phase, gyro, mode, url, heightCm, traits]);
+
+  const xrOn = mode === "xr" && phase === "on";
+  const leave = (e: MouseEvent) => { if (xrSession.current) { e.preventDefault(); void xrSession.current.end(); } };
+  const hint = loaded === "loading" ? `${name}正在過來…`
+    : loaded === "error" ? "模型載入失敗，請返回再試一次"
+    : xrOn ? (floorFound ? "點地板叫牠過去・往上滑丟球" : "把手機對著地板，慢慢左右移動，找到地板後牠就會出現")
+    : !cameraOk ? "沒有取得相機權限，先在這裡陪牠玩"
+    : gyro === false ? "點地板叫牠過去・往上滑丟球" : "轉動手機找牠・點地板叫牠過去・往上滑丟球";
 
   return (
-    <div className={`petcam ${cameraOk ? "" : "room"}`}>
-      <video ref={video} className="petcam-video" playsInline muted autoPlay style={{ display: cameraOk ? "block" : "none" }} />
+    <div ref={root} className={`petcam ${cameraOk ? "" : "room"} ${xrOn ? "xr" : ""}`}>
+      <video ref={video} className="petcam-video" playsInline muted autoPlay style={{ display: cameraOk && !xrOn ? "block" : "none" }} />
       {!cameraOk && <div className="petcam-room" />}
       {phase === "on" && (
         <div className="ar3d">
@@ -446,22 +563,42 @@ export function PetCamera({ url, name, heightCm, traits, backHref }: { url: stri
       )}
 
       <div className="petcam-top">
-        <Link className="btn small" href={backHref}>‹ 返回</Link>
-        {phase === "on" && <button className="btn small" onClick={() => setSitting(!sitting)}>{sitting ? "我坐著" : "我站著"}</button>}
+        {xrOn ? <button className="btn small" onClick={() => void xrSession.current?.end()}>‹ 結束</button>
+          : backHref ? <Link className="btn small" href={backHref} onClick={leave}>‹ 返回</Link> : <span />}
+        {phase === "on" && !xrOn && <button className="btn small" onClick={() => setSitting(!sitting)}>{sitting ? "我坐著" : "我站著"}</button>}
       </div>
 
       {phase !== "on" ? (
         <div className="petcam-intro card stack">
           <h1 style={{ margin: 0 }}>讓{name}來陪你</h1>
-          <p className="small">打開鏡頭，{name}會出現在你身邊的地板上。點地板叫牠過去、點牠摸摸牠、往上滑丟球給牠撿。</p>
-          <p className="tiny">畫面只在你的手機上，不會錄影或上傳。iPhone 會再問一次「動作與方向」，允許後轉動手機牠會留在原地。</p>
-          <button className="btn primary" disabled={phase === "starting"} onClick={() => void start()}>{phase === "starting" ? "打開中…" : "打開鏡頭"}</button>
+          {xrOk ? (
+            <>
+              <p className="small">手機會先找到你家的地板，{name}會用真實的大小站在地上。你走過去、繞著牠看都可以。點地板叫牠過去、點牠摸摸牠、往上滑丟球給牠撿。</p>
+              <button className="btn primary" disabled={phase === "starting"} onClick={() => void startXr()}>{phase === "starting" ? "打開中…" : "放在真的地板上"}</button>
+              <button className="btn" disabled={phase === "starting"} onClick={() => void start()}>用一般鏡頭</button>
+            </>
+          ) : (
+            <>
+              <p className="small">打開鏡頭，{name}會出現在你身邊的地板上。點地板叫牠過去、點牠摸摸牠、往上滑丟球給牠撿。</p>
+              <button className="btn primary" disabled={phase === "starting"} onClick={() => void start()}>{phase === "starting" ? "打開中…" : "打開鏡頭"}</button>
+              {lineApp ? (
+                <>
+                  <a className="btn" href={externalHref} target="_blank" rel="noopener">用手機瀏覽器開，認得真的地板</a>
+                  <p className="tiny">LINE 裡的鏡頭只知道手機怎麼轉，不知道地板在哪。用手機瀏覽器（Android 的 Chrome、iPhone 的 Safari）開，{name}會站在真的地板上、大小也跟真的一樣。這個連結 2 小時內有效。</p>
+                </>
+              ) : (
+                <>
+                  <RealSizeAr modelUrl={url} heightCm={heightCm} name={name} />
+                  <p className="tiny">「放在身邊看看」用手機內建的 AR 認得地板，用真實大小站著（這個模式不會走動）。</p>
+                </>
+              )}
+            </>
+          )}
+          <p className="tiny">畫面只在你的手機上，不會錄影或上傳。{xrOk ? "" : "iPhone 會再問一次「動作與方向」，允許後轉動手機牠會留在原地。"}</p>
         </div>
       ) : (
         <>
-          <p className="petcam-hint">
-            {loaded === "loading" ? `${name}正在過來…` : loaded === "error" ? "模型載入失敗，請返回再試一次" : !cameraOk ? "沒有取得相機權限，先在這裡陪牠玩" : gyro === false ? "點地板叫牠過去・往上滑丟球" : "轉動手機找牠・點地板叫牠過去・往上滑丟球"}
-          </p>
+          <p className="petcam-hint">{hint}</p>
           <div className="ar3d-play">
             <button className="btn" onClick={() => cmd.current("come")}>叫牠過來</button>
             <button className="btn" onClick={() => cmd.current("ball")}>丟球</button>

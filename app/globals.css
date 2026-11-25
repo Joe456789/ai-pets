@@ -218,3 +218,7 @@ fieldset.field legend { padding: 0; }
 .ar3d-play .btn { background: rgba(255,255,255,.94); box-shadow: 0 4px 12px rgba(0,0,0,.18); }
 @media (prefers-reduced-motion: reduce) { .ar3d-heart { animation-duration: .01s; } }
 .petcam.room .petcam-hint { color: var(--ink-2); text-shadow: none; }
+
+/* 真的地板（WebXR）：畫面畫在 AR 圖層，網頁只剩按鈕和提示 */
+.petcam.xr { background: transparent; }
+.petcam.xr .ar3d-canvas { visibility: hidden; }
