@@ -122,10 +122,16 @@ export function KeepsakeForm({ petId, name }: { petId: string; name: string }) {
                 <b>{a.name}</b>{a.must ? <span className="tiny">（一定要，3D 的身形照這張做）</span> : <span className="tiny">（選填）</span>}
                 <div className="tiny muted">{a.tip}</div>
               </div>
-              <label className="btn small">
-                {shots[i] ? "重拍" : "拍"}
-                <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => { setShot(i, e.target.files?.[0]); e.target.value = ""; }} />
-              </label>
+              <div className="stack" style={{ gap: 4 }}>
+                <label className="btn small">
+                  {shots[i] ? "重拍" : "拍照"}
+                  <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => { setShot(i, e.target.files?.[0]); e.target.value = ""; }} />
+                </label>
+                <label className="btn small">
+                  相簿
+                  <input type="file" accept="image/*" hidden onChange={(e) => { setShot(i, e.target.files?.[0]); e.target.value = ""; }} />
+                </label>
+              </div>
             </div>
           ))}
         </div>
