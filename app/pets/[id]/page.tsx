@@ -16,9 +16,9 @@ export default async function EditPet({ params }: { params: Promise<{ id: string
   return (
     <>
       <DemoBanner uid={uid} />
-      <PageHead title={`編輯${pet.name}`} />
+      <PageHead title={`編輯${pet.name}`} action={!isDemo(uid) ? <a className="btn small" href="#delete">刪除</a> : undefined} />
       <PetForm pet={pet} />
-      {!isDemo(uid) && <div style={{ marginTop: 18 }}><DeletePet id={pet.id} name={pet.name} passed={pet.status === "已離開"} /></div>}
+      {!isDemo(uid) && <div id="delete" style={{ marginTop: 18 }}><DeletePet id={pet.id} name={pet.name} passed={pet.status === "已離開"} /></div>}
     </>
   );
 }

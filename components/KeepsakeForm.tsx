@@ -64,6 +64,8 @@ export function KeepsakeForm({ petId, name }: { petId: string; name: string }) {
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const shotUrls = usePreviews(shots);
+  const [inLine, setInLine] = useState(false);
+  useEffect(() => setInLine(/ Line\//i.test(navigator.userAgent)), []);
   const frameUrls = usePreviews(frames);
 
   const setShot = (i: number, f: File | undefined) => setShots((cur) => cur.map((x, j) => (j === i ? f ?? null : x)));
@@ -130,10 +132,18 @@ export function KeepsakeForm({ petId, name }: { petId: string; name: string }) {
       ) : (
         <div className="stack">
           <p className="small">從<b>牠的側面開始錄</b>，慢慢繞牠走一圈（大約 15～30 秒），鏡頭一直對著牠。錄完我們會在你的手機上挑出幾張畫面，<b>影片本身不會上傳</b>。</p>
-          <label className="btn" style={{ justifySelf: "start" }}>
-            {frames.length ? "重新錄" : "開始錄影"}
-            <input type="file" accept="video/*" capture="environment" hidden onChange={(e) => { readVideo(e.target.files?.[0]); e.target.value = ""; }} />
-          </label>
+          <div className="row" style={{ gap: 8 }}>
+            {/* android/allowCamera：Android 14 以後只寫 video/* 不會出現錄影選項 */}
+            <label className="btn">
+              {frames.length ? "重新錄" : "開始錄影"}
+              <input type="file" accept="video/*,android/allowCamera" capture="environment" hidden onChange={(e) => { readVideo(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+            <label className="btn">
+              從相簿選影片
+              <input type="file" accept="video/*" hidden onChange={(e) => { readVideo(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+          </div>
+          {inLine && <p className="tiny">在 LINE 裡選不到影片的話，可以先用手機相機錄好，再<a href={`${typeof location !== "undefined" ? location.pathname : ""}?openExternalBrowser=1`}>用手機瀏覽器打開這一頁</a>（用 LINE 帳號登入）從相簿選；或改用「照著指示拍照」。</p>}
           {reading && <p className="small muted">正在從影片挑畫面…</p>}
           {frames.length > 0 && (
             <>

@@ -63,7 +63,7 @@ export default async function MePage() {
                 <div className="row" style={{ gap: 6, marginTop: 6 }}>
                   <Link className={`btn small ${p.status === "在世" ? "primary" : ""}`} href={`/pets/${p.id}/records`}>醫療紀錄{count ? `（${count}）` : ""}</Link>
                   {p.status === "在世" && <Link className="btn small" href={`/change?pet=${p.id}`}>生活變動</Link>}
-                  {!isDemo(uid) && <Link className="btn small" href={`/pets/${p.id}`}>編輯</Link>}
+                  {!isDemo(uid) && <Link className="btn small" href={`/pets/${p.id}`}>編輯／刪除</Link>}
                   {p.status === "在世" && (keepOf.get(p.id)
                     ? <Link className="btn small" href={`/memorial/${keepOf.get(p.id)!.id}`}>{keepOf.get(p.id)!.status === "完成" ? "牠的 3D" : `3D ${keepOf.get(p.id)!.status}`}</Link>
                     : !isDemo(uid) && <Link className="btn small" href={`/pets/${p.id}/keep`}>幫牠留下 3D</Link>)}
