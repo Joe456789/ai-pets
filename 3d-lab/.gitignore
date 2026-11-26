@@ -8,7 +8,7 @@ jobs/
 # 執行紀錄
 *.log
 # 工作站密鑰，不要上傳
-worker.env
+worker*.env
 .claude/
 __pycache__/
 

@@ -27,7 +27,8 @@ IMAGE = "langlang-trellis"
 
 def load_env():
     env = {}
-    f = HERE / "worker.env"
+    # --prod：連正式站，讀 worker.prod.env；平常（本機測試站）讀 worker.env
+    f = HERE / ("worker.prod.env" if "--prod" in sys.argv else "worker.env")
     if f.exists():
         for line in f.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.strip().startswith("#"):
