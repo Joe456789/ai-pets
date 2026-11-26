@@ -11,3 +11,6 @@ jobs/
 worker.env
 .claude/
 __pycache__/
+
+# 只在這台電腦用的磁碟整理指令
+compact-docker.txt

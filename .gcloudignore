@@ -1,0 +1,6 @@
+# 部署到 Cloud Run 時不上傳的東西。3d-lab 是在自己電腦上跑的 3D 工作站（含幾 GB 的模型），網站用不到。
+.gcloudignore
+.git
+.gitignore
+3d-lab/
+#!include:.gitignore

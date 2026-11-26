@@ -1,6 +1,6 @@
 # 從此有你：3D 紀念工作站
 
-「紀念與告別」功能的 3D 重建工作站。在有 NVIDIA 顯示卡的電腦上，用 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 把飼主上傳的照片做成 3D 模型（GLB），再傳回網站。網站程式在 [cong-ci-you-ni](https://github.com/Joe456789/cong-ci-you-ni)。
+「紀念與告別」功能的 3D 重建工作站。在有 NVIDIA 顯示卡的電腦上，用 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 把飼主上傳的照片做成 3D 模型（GLB），再傳回網站。網站程式就在這個專案的上一層資料夾。
 
 ## 檔案
 

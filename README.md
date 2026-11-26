@@ -1,4 +1,6 @@
-# 從此有你
+# AI 寵物
+
+2026 AI for Pets 參賽作品，產品名稱「從此有你」。
 
 **用 AI 支持終養不棄養的飼主 LINE 平台**
 
@@ -40,7 +42,7 @@
 - 毛孩離開後，用飼主手機裡的照片，以 [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) 重建牠的 3D 模型。
 - 模型會呼吸、搖尾巴、轉頭；可以用手機 AR 以真實大小放在身邊。
 - AI 依飼主寫下的回憶寫一段紀念文，飼主確認後才顯示。
-- 3D 重建在另一台有顯示卡的電腦上執行，程式在 [cong-ci-you-ni-3d-lab](https://github.com/Joe456789/cong-ci-you-ni-3d-lab)。
+- 3D 重建在另一台有顯示卡的電腦上執行，程式在這個專案的 [`3d-lab/`](3d-lab/) 資料夾，不會跟網站一起部署。
 
 ## AI 怎麼用、怎麼把關
 
