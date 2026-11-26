@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3D 模型比較</title>
+<script type="module" src="https://unpkg.com/@google/model-viewer@4.3.1/dist/model-viewer.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f3efe6; }
+  .row { display: grid; grid-template-columns: 70px repeat(4, 170px); gap: 6px; padding: 4px 8px; align-items: center; }
+  model-viewer { width: 100%; height: 170px; background: #e8e2d4; border-radius: 8px; }
+  .name { font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="rows"></div>
+<script>
+  // ?f=a.glb,b.glb&n=名稱1,名稱2&v=角度清單（用 | 分隔）
+  const q = new URLSearchParams(location.search);
+  const files = (q.get("f") || "").split(",").filter(Boolean);
+  const cell = Number(q.get("c") || 170); // 每格的大小（像素）
+  document.head.insertAdjacentHTML("beforeend", `<style>.row{grid-template-columns:40px repeat(${(q.get("v") || "a|b|c|d").split("|").length}, ${cell}px)} model-viewer{height:${cell}px}</style>`);
+  const names = (q.get("n") || "").split(",");
+  const views = (q.get("v") || "0deg 80deg 2.2m|90deg 80deg 2.2m|180deg 80deg 2.2m|270deg 80deg 2.2m").split("|");
+  files.forEach((file, i) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = names[i] || file;
+    row.appendChild(name);
+    for (const o of views) {
+      const mv = document.createElement("model-viewer");
+      mv.setAttribute("src", file);
+      mv.setAttribute("camera-orbit", o);
+      mv.setAttribute("camera-controls", "");
+      mv.setAttribute("interaction-prompt", "none");
+      mv.setAttribute("exposure", "1");
+      row.appendChild(mv);
+    }
+    document.getElementById("rows").appendChild(row);
+  });
+</script>
+</body>
+</html>
