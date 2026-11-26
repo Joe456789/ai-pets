@@ -157,6 +157,20 @@ export async function createMemorial(doc: Omit<MemorialDoc, "id" | "createdAt" |
 }
 export const updateMemorial = (id: string, patch: Partial<MemorialDoc>) => db().update(`memorials/${id}`, { ...patch, updatedAt: nowIso() });
 
+export const deleteMemorial = (id: string) => db().delete(`memorials/${id}`);
+
+/* 生前留下的 3D：跟紀念共用工作站和 3D 頁面，只是多一個 keepsake 標記 */
+export const keepsakeOf = async (uid: string, petId: string) =>
+  (await listMemorials(uid)).find((m) => m.keepsake && m.petId === petId) ?? null;
+
+/** 牠離開後，把生前留下的 3D 直接轉成紀念（不用重做模型）。 */
+export async function keepsakeToMemorial(uid: string, petId: string, memories: string) {
+  const k = await keepsakeOf(uid, petId);
+  if (!k) return null;
+  await updateMemorial(k.id, { keepsake: false, memories });
+  return { ...k, keepsake: false, memories };
+}
+
 /** 工作站領下一個任務。太久沒回報的「製作中」視為工作站中斷，重新排隊。 */
 export async function claimNextMemorial(staleMs = 60 * 60 * 1000) {
   const all = await db().list<MemorialDoc>("memorials");

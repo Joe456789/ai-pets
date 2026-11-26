@@ -10,7 +10,9 @@ export default async function MemorialHome() {
   const uid = await currentUid();
   const intro = <PageHead title="紀念與告別" sub="陪牠走完一生，也是終養的一部分。當牠離開，用你手機裡的照片重建牠的 3D 樣子，留下你們的故事。" />;
   if (!uid) return <>{intro}<SignInCard what="為牠建立紀念" /></>;
-  const [memorials, pets] = await Promise.all([listMemorials(uid), listPets(uid)]);
+  const [all, pets] = await Promise.all([listMemorials(uid), listPets(uid)]);
+  // 牠還在時留下的 3D 放在「我的毛孩」，這裡只列紀念
+  const memorials = all.filter((m) => !m.keepsake);
   const photoOf = new Map(pets.map((p) => [p.id, p.photo]));
   return (
     <>

@@ -1,6 +1,7 @@
 "use server";
 import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { KEEPSAKE_MAX } from "@/lib/constants";
 import { z } from "zod";
 import { AiUnavailableError } from "@/lib/ai/gemini";
 import { extractRecord, writeAssessReport, writeChangeNote, writeTribute } from "@/lib/ai/tasks";
@@ -325,18 +326,57 @@ export async function createMemorialAction(form: FormData): Promise<Result<strin
     const uid = await requireWriter();
     const pet = await repo.getPet(uid, String(form.get("petId") ?? ""));
     if (!pet) return { ok: false, error: "請先選擇毛孩" };
+    const memories = String(form.get("memories") ?? "").trim().slice(0, 1200);
+    const passed = async () => {
+      if (pet.status !== "已離開") await repo.savePet(uid, { ...pet, status: "已離開", passedAt: nowIso() });
+      await repo.deleteCareForPet(uid, pet.id);
+      revalidatePath("/memorial");
+    };
+    // 牠還在時已經留下 3D：直接轉成紀念，不用重新上傳照片
+    if (form.get("fromKeepsake") === "1") {
+      const k = await repo.keepsakeToMemorial(uid, pet.id, memories);
+      if (!k) return { ok: false, error: "找不到生前留下的 3D，請改成上傳照片" };
+      await passed();
+      return { ok: true, data: k.id };
+    }
     const files = form.getAll("photos").filter((f): f is File => f instanceof File && f.size > 0).slice(0, 4);
     if (!files.length) return { ok: false, error: "至少要一張照片" };
     const photos: string[] = [];
     for (const f of files) photos.push((await photoFrom(uid, f))!);
-    const memories = String(form.get("memories") ?? "").trim().slice(0, 1200);
-    if (pet.status !== "已離開") await repo.savePet(uid, { ...pet, status: "已離開", passedAt: nowIso() });
-    await repo.deleteCareForPet(uid, pet.id);
+    await passed();
     const m = await repo.createMemorial({
       uid, petId: pet.id, petName: pet.name, kind: pet.kind,
       heightCm: HEIGHT[pet.kind === "貓" ? "貓" : pet.size ?? "中型"], photos, memories,
     });
     revalidatePath("/memorial");
+    return { ok: true, data: m.id };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** 趁牠還在，用多角度照片（或影片裡挑出的畫面）先留下 3D。重拍時取代舊的那一份。 */
+
+export async function createKeepsakeAction(form: FormData): Promise<Result<string>> {
+  try {
+    const uid = await requireWriter();
+    const pet = await repo.getPet(uid, String(form.get("petId") ?? ""));
+    if (!pet) return { ok: false, error: "找不到這隻毛孩" };
+    if (pet.status !== "在世") return { ok: false, error: "牠已經離開了，請改用「紀念與告別」" };
+    const files = form.getAll("photos").filter((f): f is File => f instanceof File && f.size > 0).slice(0, KEEPSAKE_MAX);
+    if (files.length < 2) return { ok: false, error: "至少要 2 個角度（第一張是側面全身）" };
+    const photos: string[] = [];
+    for (const f of files) photos.push((await photoFrom(uid, f))!);
+    const old = await repo.keepsakeOf(uid, pet.id);
+    if (old) {
+      for (const f of [...old.photos, ...(old.glb ? [old.glb] : [])]) await deleteFileByUrl(f).catch(() => undefined);
+      await repo.deleteMemorial(old.id);
+    }
+    const m = await repo.createMemorial({
+      uid, petId: pet.id, petName: pet.name, kind: pet.kind, keepsake: true,
+      heightCm: HEIGHT[pet.kind === "貓" ? "貓" : pet.size ?? "中型"], photos, memories: "",
+    });
+    revalidatePath("/me");
     return { ok: true, data: m.id };
   } catch (e) {
     return fail(e);

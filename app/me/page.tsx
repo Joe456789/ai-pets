@@ -16,7 +16,8 @@ export default async function MePage() {
   if (!uid) return <SignInCard what="管理你的毛孩和紀錄" />;
   const [owner, pets, assessments, memorials, care, changes] = await Promise.all([getOwner(uid), listPets(uid), listAssessments(uid), listMemorials(uid), listCare(uid), listChanges(uid)]);
   const hasAlive = pets.some((p) => p.status === "在世");
-  const memorialOf = new Map(memorials.map((m) => [m.petId, m]));
+  const memorialOf = new Map(memorials.filter((m) => !m.keepsake).map((m) => [m.petId, m]));
+  const keepOf = new Map(memorials.filter((m) => m.keepsake).map((m) => [m.petId, m]));
   const today = taipeiDate();
   const recordsOf = new Map(await Promise.all(pets.map(async (p) => [p.id, await listRecords(uid, p.id)] as const)));
   const nextVisit = (id: string) => (recordsOf.get(id) ?? []).map((r) => r.followUp).filter((d) => d && d >= today).sort()[0];
@@ -63,6 +64,9 @@ export default async function MePage() {
                   <Link className={`btn small ${p.status === "在世" ? "primary" : ""}`} href={`/pets/${p.id}/records`}>醫療紀錄{count ? `（${count}）` : ""}</Link>
                   {p.status === "在世" && <Link className="btn small" href={`/change?pet=${p.id}`}>生活變動</Link>}
                   {!isDemo(uid) && <Link className="btn small" href={`/pets/${p.id}`}>編輯</Link>}
+                  {p.status === "在世" && (keepOf.get(p.id)
+                    ? <Link className="btn small" href={`/memorial/${keepOf.get(p.id)!.id}`}>{keepOf.get(p.id)!.status === "完成" ? "牠的 3D" : `3D ${keepOf.get(p.id)!.status}`}</Link>
+                    : !isDemo(uid) && <Link className="btn small" href={`/pets/${p.id}/keep`}>幫牠留下 3D</Link>)}
                   {m ? <Link className="btn small" href={`/memorial/${m.id}`}>3D 紀念</Link>
                     : p.status === "已離開" && !isDemo(uid) && <Link className="btn small" href={`/memorial/new?pet=${p.id}`}>建立紀念</Link>}
                 </div>

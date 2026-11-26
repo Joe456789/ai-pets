@@ -298,8 +298,8 @@ export async function sendLessons(now = new Date()) {
 }
 
 /** 3D 紀念做好時通知本人。 */
-export async function notifyMemorialReady(uid: string, petName: string, memorialId: string) {
+export async function notifyMemorialReady(uid: string, petName: string, memorialId: string, keepsake = false) {
   const creds = await repo.getLineCreds();
   if (!creds || repo.isDemo(uid)) return;
-  await lineClient(creds).push(uid, [msg.memorialReadyCard(petName, memorialId)]).catch((e) => console.error("紀念完成推播失敗", (e as Error).message));
+  await lineClient(creds).push(uid, [msg.memorialReadyCard(petName, memorialId, keepsake)]).catch((e) => console.error("紀念完成推播失敗", (e as Error).message));
 }

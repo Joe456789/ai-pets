@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   try {
     const glb = await saveGlb(m.uid, Buffer.from(await req.arrayBuffer()));
     await updateMemorial(m.id, { status: "完成", glb, error: "" });
-    await notifyMemorialReady(m.uid, m.petName, m.id);
+    await notifyMemorialReady(m.uid, m.petName, m.id, m.keepsake);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });

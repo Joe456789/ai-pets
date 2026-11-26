@@ -150,10 +150,11 @@ export function lessonCard(l: Lesson, why: string, monthly = false): LineMessage
   });
 }
 
-export function memorialReadyCard(petName: string, memorialId: string): LineMessage {
+export function memorialReadyCard(petName: string, memorialId: string, keepsake = false): LineMessage {
+  const head = keepsake ? `${petName}的 3D 做好了` : `${petName}的 3D 紀念完成了`;
   return card({
-    alt: `${petName}的 3D 紀念完成了`, head: `${petName}的 3D 紀念完成了`,
-    note: "用你的照片重建的樣子，可以轉動看看，也可以用手機放在身邊。",
+    alt: head, head,
+    note: keepsake ? "用你拍的各個角度做的，可以轉動看看，也可以打開鏡頭讓牠出現在身邊。" : "用你的照片重建的樣子，可以轉動看看，也可以用手機放在身邊。",
     buttons: [{ label: "去看看牠", uri: liffUrl(`/memorial/${memorialId}`), primary: true }],
   });
 }

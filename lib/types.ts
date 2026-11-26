@@ -209,6 +209,8 @@ export type MemorialDoc = {
   tribute: string;
   tributeOk: boolean;
   status: MemorialStatus;
+  /** 毛孩還在時先留下的 3D（多角度照片或影片畫面）。離開後可以直接轉成紀念。 */
+  keepsake?: boolean;
   glb?: string;
   error?: string;
   shareToken?: string;
