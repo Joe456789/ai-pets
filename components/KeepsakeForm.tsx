@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { createKeepsakeAction } from "@/app/actions";
+import { ShapeWarning, useShapeCheck } from "@/components/ShapeWarning";
 import { shrinkImage } from "@/lib/clientImage";
 import { KEEPSAKE_MAX } from "@/lib/constants";
 
@@ -87,11 +88,17 @@ export function KeepsakeForm({ petId, name }: { petId: string; name: string }) {
   const toggle = (i: number) => setPicked((cur) => (cur.includes(i) ? cur.filter((x) => x !== i) : cur.length < KEEPSAKE_MAX ? [...cur, i] : cur));
 
   const chosen = mode === "photo" ? (shots[0] ? shots.filter((f): f is File => Boolean(f)) : []) : picked.map((i) => frames[i]);
-  const submit = () => start(async () => {
+  const shape = useShapeCheck();
+  const first = chosen[0];
+  const { reset } = shape;
+  useEffect(() => reset(), [first, reset]);
+  const submit = (force = false) => start(async () => {
     setError("");
+    const files = await Promise.all(chosen.map((f) => (mode === "photo" ? shrinkImage(f) : f)));
+    if (!(await shape.check(files[0], force))) return;
     const form = new FormData();
     form.set("petId", petId);
-    for (const f of chosen) form.append("photos", mode === "photo" ? await shrinkImage(f) : f);
+    for (const f of files) form.append("photos", f);
     const r = await createKeepsakeAction(form);
     if (!r.ok) { setError(r.error); return; }
     router.push(`/memorial/${r.data}`);
@@ -171,8 +178,9 @@ export function KeepsakeForm({ petId, name }: { petId: string; name: string }) {
       )}
 
       {error && <p className="error-box">{error}</p>}
-      <button className="btn primary" disabled={pending || chosen.length < 2} onClick={submit}>
-        {pending ? "上傳中…" : chosen.length < 2 ? "至少要 2 個角度（含側面全身）" : `用這 ${chosen.length} 張留下${name}的 3D`}
+      <ShapeWarning text={shape.warning} busy={pending} onAccept={() => { shape.accept(); submit(true); }} />
+      <button className="btn primary" disabled={pending || chosen.length < 2} onClick={() => submit()}>
+        {pending ? "檢查照片、上傳中…" : chosen.length < 2 ? "至少要 2 個角度（含側面全身）" : `用這 ${chosen.length} 張留下${name}的 3D`}
       </button>
       <p className="tiny">照片會送到我們的 3D 工作站，通常幾分鐘到幾小時內完成，做好用 LINE 通知你。照片只用來做牠的 3D，可以隨時連同毛孩資料一起刪除。重拍會取代舊的那一份。</p>
     </div>

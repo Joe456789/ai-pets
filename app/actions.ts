@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { KEEPSAKE_MAX } from "@/lib/constants";
 import { z } from "zod";
 import { AiUnavailableError } from "@/lib/ai/gemini";
-import { extractRecord, writeAssessReport, writeChangeNote, writeTribute } from "@/lib/ai/tasks";
+import { checkShapePhoto, extractRecord, writeAssessReport, writeChangeNote, writeTribute } from "@/lib/ai/tasks";
 import { currentUid, DemoReadOnly, endSession, NotSignedIn, requireWriter } from "@/lib/auth";
 import { lifetimeCost, type LifetimeCost } from "@/lib/lifetimeCost";
 import { deleteFileByUrl, readFileByUrl, savePhoto } from "@/lib/media";
@@ -388,6 +388,28 @@ async function ownMemorial(id: string) {
   const m = await repo.getMemorial(id);
   if (!m || m.uid !== uid) throw new Error("找不到這個紀念");
   return m;
+}
+
+/**
+ * 送出 3D 前先看第一張照片的姿勢。照片不存檔，只送給 AI 看。
+ * 檢查本身出錯時不擋人（回傳 ok）。
+ */
+export async function checkShapePhotoAction(form: FormData): Promise<Result<{ ok: boolean; problem: string }>> {
+  try {
+    const uid = await requireWriter();
+    const f = form.get("photo");
+    if (!(f instanceof File) || f.size === 0 || f.size > MAX_PHOTO || !f.type.startsWith("image/")) return { ok: false, error: "照片太大或格式不支援" };
+    try {
+      const r = await checkShapePhoto(uid, { inlineData: { mimeType: f.type, data: Buffer.from(await f.arrayBuffer()).toString("base64") } });
+      return { ok: true, data: { ok: r.ok, problem: r.ok ? "" : r.problem || "這張不太適合，請換一張站著、從側面拍到全身的照片。" } };
+    } catch (e) {
+      // 檢查失敗（AI 沒設定、額度用完、連線問題）就不擋人
+      console.error("3D 照片檢查失敗", (e as Error).message);
+      return { ok: true, data: { ok: true, problem: "" } };
+    }
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 export async function tributeDraftAction(id: string): Promise<Result<string>> {

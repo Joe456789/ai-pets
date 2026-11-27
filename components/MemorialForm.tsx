@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { createMemorialAction } from "@/app/actions";
+import { ShapeWarning, useShapeCheck } from "@/components/ShapeWarning";
 import { shrinkImage } from "@/lib/clientImage";
 
 type PetOpt = { id: string; name: string };
@@ -27,13 +28,20 @@ export function MemorialForm({ pets, initial, keeps = [] }: { pets: PetOpt[]; in
   const add = (list: FileList | null) => { const picked = Array.from(list ?? []); setFiles((cur) => [...cur, ...picked].slice(0, 4)); };
   const makeFirst = (i: number) => setFiles((cur) => [cur[i], ...cur.filter((_, j) => j !== i)]);
 
-  const submit = () => start(async () => {
+  const shape = useShapeCheck();
+  const { reset } = shape;
+  useEffect(() => reset(), [files, reset]);
+  const submit = (force = false) => start(async () => {
     setError("");
     const form = new FormData();
     form.set("petId", petId);
     form.set("memories", memories);
     if (fromKeep) form.set("fromKeepsake", "1");
-    else for (const f of files) form.append("photos", await shrinkImage(f));
+    else {
+      const small = await Promise.all(files.map((f) => shrinkImage(f)));
+      if (!(await shape.check(small[0], force))) return;
+      for (const f of small) form.append("photos", f);
+    }
     const r = await createMemorialAction(form);
     if (!r.ok) { setError(r.error); return; }
     router.push(`/memorial/${r.data}`);
@@ -77,7 +85,8 @@ export function MemorialForm({ pets, initial, keeps = [] }: { pets: PetOpt[]; in
       </label>
 
       {error && <p className="error-box">{error}</p>}
-      <button className="btn primary" disabled={pending || (!fromKeep && !files.length) || !petId} onClick={submit}>{pending ? "上傳中…" : fromKeep ? "建立紀念" : "開始製作 3D 紀念"}</button>
+      {!fromKeep && <ShapeWarning text={shape.warning} busy={pending} onAccept={() => { shape.accept(); submit(true); }} />}
+      <button className="btn primary" disabled={pending || (!fromKeep && !files.length) || !petId} onClick={() => submit()}>{pending ? "檢查照片、上傳中…" : fromKeep ? "建立紀念" : "開始製作 3D 紀念"}</button>
       {!fromKeep && <p className="tiny">照片會送到我們的 3D 工作站重建模型，通常幾分鐘到幾小時內完成，完成後用 LINE 通知你。照片只用來做這個紀念。</p>}
     </div>
   );

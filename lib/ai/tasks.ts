@@ -100,3 +100,26 @@ export async function writeTribute(scope: string, input: { name: string; kind: s
   if (findBannedClaim(text)) throw new Error("紀念文未通過檢查，請再試一次或自己寫");
   return text.trim();
 }
+
+/* 3D 的第一張照片：身形照這張做，姿勢不對做出來就會壞 */
+const shapeSchema = z.object({
+  animal: z.boolean(),
+  standing: z.boolean(),
+  side: z.boolean(),
+  wholeBody: z.boolean(),
+  problem: z.string(),
+});
+export type ShapeCheck = z.infer<typeof shapeSchema>;
+
+/** 檢查 3D 第一張照片：要是一隻貓或狗、四隻腳站著、從側面拍、全身都在畫面裡。只看姿勢和構圖，不評論健康。 */
+export async function checkShapePhoto(scope: string, photo: AiPart): Promise<ShapeCheck & { ok: boolean }> {
+  const system = `${COMMON_RULES}
+工作：這張照片要用來重建貓狗的 3D 模型，3D 的身形完全照這張做。只判斷姿勢和構圖：
+- animal：畫面主角是一隻貓或狗（只有一隻）。
+- standing：四隻腳的腳掌都踩在地上、靜止站著。逐一看四隻腳：只要有任何一隻腳掌離地或明顯抬起（正在走路、跑步、跨步），就是 false。躺著、趴著、坐著、被人抱著、跳在半空中也都是 false。
+- side：看「身體」的方向，不看頭。身體大致橫向、看得到從胸口到屁股的長度就是 true；頭轉過來看鏡頭也沒關係。只有身體正對鏡頭（只看到胸口）或正背對鏡頭（只看到屁股）才是 false。
+- wholeBody：頭、四隻腳的腳掌和尾巴都在畫面內，沒有被切掉或被東西擋住。
+- problem：如果有任何一項是 false，用一句溫和的白話告訴飼主哪裡不行、怎麼重拍（例如「牠是躺著的，請等牠站起來，從旁邊拍全身」）；全部都沒問題就填空字串。`;
+  const r = await generateJson({ scope, system, parts: [photo, { text: "請檢查這張照片。" }], schema: shapeSchema, temperature: 0 });
+  return { ...r, ok: r.animal && r.standing && r.side && r.wholeBody };
+}
